@@ -4,6 +4,11 @@ All notable changes to Delegator are documented here. This project adheres to
 [Semantic Versioning](https://semver.org), and the format is based on
 [Keep a Changelog](https://keepachangelog.com).
 
+## [0.3.20] — 2026-06-21
+
+### Docs
+- Rewrote the README as a lean, provider-neutral entrypoint. No code changes.
+
 ## [0.3.19] — 2026-06-21
 
 First public release.
