@@ -10,221 +10,89 @@
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
 </p>
 
-> One architect. Many executors. Verified patches, not model claims.
+> Your coding agent is the architect. Delegator gives it executors. Verified patches, not model claims.
 
-**Delegator is a CLI that hands bounded coding tasks from your main AI agent to the other models and agents you already have — and returns a verified patch, not a promise.**
+A CLI your agent uses to hand bounded tasks to other models. Each run gets an isolated worktree,
+hard budgets, your build/tests, and a patch you apply or undo. Delegator dispatches and verifies;
+it never calls an LLM to decide.
 
-Not another "1000-in-1" miracle agent. Just an orchestrator for the agents and models you already use. Expand, not replace.
+Delegator ships no models. Use a subscription CLI, an API-backed provider, or a local server:
+Claude Code, Codex, OpenCode, GLM, MiMo, DeepSeek, LM Studio, Ollama, vLLM, and compatible runtimes.
 
-Each task runs on whatever else you've got — a separate subscription, an API key, a free account, or a local model — isolated in a throwaway git worktree, under a hard budget, and checked by *your* build and tests. You apply or undo; the worker never touches your real tree.
+## Install
 
-**It ships no models and no subscription — you bring your own.** Works with Codex, Claude Code, OpenCode, GLM, MiMo, DeepSeek, Ollama, LM Studio, and any OpenAI-compatible endpoint.
+```shell
+npm install -g @rizias/delegator   # the dlg CLI
+dlg init                           # scaffold ~/.delegator/
+dlg skill install claude-code      # or: codex | agents-md (one AGENTS.md — OpenCode, Gemini, any reader)
+```
 
-## Why Delegator
+`dlg skill show` prints the block for any other instruction format. Or tell your agent *"set up
+Delegator for this project"* — it runs these and drafts `providers.yaml`.
 
-Real problems, and what Delegator does about each.
+Each worker logs in itself (`claude` → `/login`, `codex login`, `opencode auth login`, …); Delegator
+spawns it, never logs in for it. API keys go in `~/.delegator/secrets.yaml`.
+[Quickstart](docs/QUICKSTART.md): install to first run in five minutes.
 
-### Point it at anything
+## Why use it
 
-- **Want a sub-agent on a local model?** Ask your agent to add one — Ollama or LM Studio on your own GPU becomes a worker.
-- **Using an agent CLI Delegator doesn't ship?** Add it as a YAML descriptor — no code, no release, no waiting on us.
-- **Same model on two free accounts?** Address each as its own handle and spread work across both.
-- **Want a council of different LLMs on one question?** Run the brief across several pools, then `dlg compare-runs` them side by side.
+Delegator runs *alongside* native subagents — it does not replace them:
 
-### Stay in control
+| You want to… | A native subagent… | A Delegator worker… |
+| --- | --- | --- |
+| Work off your own context window | runs in-process and **shares your session** | is a **separate process** with its own pool |
+| Not get burned by a multi-hour runaway | inherits your session's limits | runs under a **hard wall-clock + no-progress budget** |
+| Not trust a worker's "it's done" | is trusted by default | is **checked by your own build and tests** in a throwaway worktree |
+| Stay in control of your tree | edits your working tree directly | changes nothing until **`dlg apply`** (default policy); `dlg undo` reverses it |
 
-- **Afraid of a multi-hour runaway run?** Set a budget — wall-clock and no-progress limits kill it before it costs you.
-- **Don't want anything applied behind your back?** Nothing touches your tree without `dlg apply` (review is the default). Wrong patch? `dlg undo` reverses it.
-- **Want plain-config control, different rules per repo?** One global YAML registry defines every model you have; a per-repo `.delegator.yaml` locks that repo to a chosen subset and sets its own tests. Local only narrows the global set — it never overrides or conflicts with it.
-- **Getting 429s on free accounts?** Set a cooldown — Delegator backs off the rate-limited key and retries.
-- **A worker died mid-task?** Nothing is smeared across your real tree — the work stays in its isolated worktree, so you recover the partial patch and the full log (`dlg apply` / `dlg logs`). Transient failures just retry or fail over to the next worker.
+A worker on a *different* subscription frees your usage window; one on the *same* shares it. Point it
+at anything — a local model, a second account, a spare API key, an agent CLI. Each is one YAML entry.
 
-### Trust the result, not the prose
-
-- **Can't trust an external model's "it's done"?** It runs *your* build and tests in a throwaway worktree — you apply a verified patch.
-- **Worried a worker faked a green test?** If it edits your tests or CI, the run is flagged for review and never auto-applies.
-- **Don't know what the agent actually did?** Every run's full exchange is saved locally — replay it with `dlg logs <id>`.
-
-### It's yours, and stays out of the way
-
-- **Your main agent's own window maxed out?** Push work to a *separate* pool your session can't reach — and free your own capacity.
-- **Worried a tool will juggle your logins and get you banned?** It never touches your auth — each worker CLI logs in itself.
-- **Don't want clutter in your repo?** Per project it's one instruction pack — or none if you keep the skill global. Every worktree, log, and receipt lives in `~/.delegator`, never in your tree.
-
-> **You bring the capacity.** Delegator orchestrates the subscriptions, API keys, or free accounts you *already have* — it makes that access bounded, isolated, and verifiable. It doesn't hand you free model access.
-
-## How It Works
+## How it works
 
 <p align="center">
-  <img src="docs/architecture.svg" alt="Your favorite harness sends one task or question to Delegator, which dispatches it to any agent and model you already have — local, free, Codex, GLM, Opus — and returns every result verified by your own build and tests for the architect to apply, compare, or undo." width="100%">
+  <img src="docs/architecture.svg" alt="Architecture: your coding agent dispatches verified tasks to many workers" width="100%">
 </p>
 
-The key difference is control. Delegator does not replace your main agent and it
-does not ask you to trust another model's prose. It gives your architect a way
-to spend other execution capacity, then bring back evidence: a patch, logs,
-verification output, usage, and a clean apply/undo decision.
+Your agent picks the worker; Delegator spawns it as a separate process in its own git worktree,
+enforces the budget, runs your verification, and returns a patch — with logs and usage — to apply,
+compare, or undo.
 
-### And your harness's own subagents
+## Configure a worker
 
-Delegator does not replace the native subagents your harness already has (Claude
-Code's Task agents, Codex's agents) — it runs alongside them. Keep using native
-subagents for judgment near your session; use Delegator workers to offload volume
-onto separate pools. Run both at once — there is no either/or.
-
-| | Native subagent | Delegator worker |
-| --- | --- | --- |
-| Runs | in your harness, in-process | a separate CLI process |
-| Pool | **shares your window** | **a separate pool — frees your window** |
-| Trust | trusted by default | untrusted — verified by your own tests |
-| Isolation | your working tree | a throwaway git worktree |
-| Reach | your harness's models | local · free · Codex · GLM · Opus · … |
-| Best for | judgment near the session | offloaded volume, verified |
-
-## Contents
-
-- [Get Started](#get-started)
-- [Configure Models](#configure-models)
-- [Run a Task](#run-a-task)
-- [Common Workflows](#common-workflows)
-- [Security Model](#security-model)
-- [Documentation](#documentation)
-
-## What a run gives you
-
-- **Isolated worktree** - the executor never edits your live tree directly.
-- **Execution bounds** - wall-clock limits, silence timeout, and
-  no-progress detection.
-- **Local verification** - Delegator runs your build/test commands instead of
-  trusting executor text.
-- **Patch receipt** - status, diff, base commit, SHA-256, verification, usage,
-  and stop reason.
-- **Explicit apply/undo** - your main tree changes only through `dlg apply` or a
-  policy you chose.
-
-## Model council, not just patch work
-
-Delegator is built for coding patches, but the same dispatch model is useful
-whenever you want multiple independent model opinions before deciding.
-
-Run the same brief through several executors:
-
-```shell
-dlg run -w local/qwen3-coder -m "Review this design direction. Return risks and counterarguments."
-dlg run -w opencode/opencode/north-mini-code-free -m "Review this design direction. Return risks and counterarguments."
-dlg compare-runs <id1> <id2>
-```
-
-That gives your architect a small council: separate model pools, separate
-answers, one place to compare convergence, disagreement, latency, and usage
-metadata.
-
-## Why not just configure another model inside Codex?
-
-Use local and open models inside Codex when one agent using one selected model is
-the right workflow. Delegator is for the next layer up: one architect assigning
-bounded work to many executors, then comparing verified receipts.
-
-| If you need... | Use... |
-| --- | --- |
-| One agent using one selected model | A model picker or provider config |
-| One architect assigning work to many executors | Delegator |
-| Local models, API models, and CLI agents in one workflow | Delegator |
-| Disposable worktrees with budgets and verification | Delegator |
-| Machine-readable patch receipts | Delegator |
-
-## Get Started
-
-There are two pieces:
-
-1. Install the `dlg` CLI once.
-2. Add an instruction pack to any project where you want an AI host to delegate.
-
-```shell
-npm install -g @rizias/delegator
-dlg init
-dlg skill install agents-md --project
-```
-
-> **New to delegator?** The [Quickstart](docs/QUICKSTART.md) takes you from install through configuring a worker to your first reviewed run.
-
-For Claude Code:
-
-```shell
-dlg skill install claude-code --project
-```
-
-For Codex:
-
-```shell
-dlg skill install codex --project
-```
-
-`dlg` and `delegator` are the same command.
-
-```shell
-dlg --version
-delegator --version
-```
-
-## Agent install prompt
-
-If another coding agent is setting this up for you, give it this:
-
-```text
-Install Delegator for this project.
-
-Use npm to install @rizias/delegator globally, run dlg init if needed, then
-install the right host instruction pack for this repo. Do not read
-~/.delegator/secrets.yaml. Help me configure ~/.delegator/providers.yaml for the
-models and agent CLIs available on this machine.
-```
-
-## Configure models
-
-Delegator config lives in `~/.delegator/providers.yaml`. Secrets live separately
-in `~/.delegator/secrets.yaml`; agents should not read that file.
-
-Minimal local-model config:
+A worker is any `provider/model` in `~/.delegator/providers.yaml` — a subscription CLI, an API key, or
+a local server:
 
 ```yaml
 version: 1
-
-defaults:
-  model: local/qwen3-coder
-  policy: review
-  budget: { wallClock: 15m }
-
-privacy:
-  sensitivePaths:
-    - "**/.github/workflows/**"
-    - "**/*.lock"
-
 providers:
-  local:
+  openai-codex:                 # your ChatGPT/Codex plan
+    protocol: openai
+    auth: subscription
+    defaultRuntime: codex
+    models: { gpt-5.5: {} }
+
+  anthropic:                    # native Claude Code on your subscription
+    protocol: anthropic
+    auth: subscription
+    models: { claude-sonnet-4-6: {} }
+
+  local:                        # a local server (LM Studio, Ollama, vLLM…)
     protocol: openai
     auth: none
     baseUrl: http://localhost:1234/v1
-    models:
-      qwen3-coder:
-        contextWindow: 65536
+    models: { qwen3-coder: {} }
 ```
 
-Provider config is intentionally plain text. If a model appears through a CLI,
-an API endpoint, or a local OpenAI-compatible server, Delegator can usually
-describe it.
-
-Useful discovery commands:
+API-key providers (GLM, MiMo, DeepSeek, …) look the same — the key lives in
+`~/.delegator/secrets.yaml`, never in this file.
 
 ```shell
-dlg providers
-dlg providers --json
-dlg models <provider>
-dlg doctor
+dlg providers      # every worker, and whether it can run now
+dlg doctor         # binaries, keys, login reminders
 ```
 
-## Configure project verification
-
-Add a `.delegator.yaml` to the project you are working in:
+To verify patches, add `.delegator.yaml` to your project:
 
 ```yaml
 verify:
@@ -232,152 +100,88 @@ verify:
   test: npm test
 ```
 
-These commands run in the run worktree. The executor does not get to mark
-itself green.
+Verification runs inside the worktree — the worker cannot mark itself green. See
+[docs/CONFIG.md](docs/CONFIG.md).
 
 ## Run a task
 
-Write a brief:
+Write a brief — a goal and a definition of done:
 
 ```markdown
 ## Goal
-
 Add tests for provider fallback behavior.
 
 ## Definition of done
-
-- Successful fallback is covered.
-- Exhausted fallback is covered.
+- Successful and exhausted fallback are both covered.
 - The project test command passes.
 ```
 
-Preview the route:
+Preview, run, inspect, then apply or undo:
 
 ```shell
-dlg plan -f brief.md
+dlg plan   -f brief.md                  # preview the route, no run
+dlg run    -f brief.md --budget 10m     # default policy: review
+dlg result <runId>                      # status, diff, usage
+dlg logs   <runId>                      # full worker exchange
+dlg apply  <runId>                      # write the reviewed patch to your tree
+dlg undo   <runId>                      # reverse an applied run
 ```
 
-Run it:
-
-```shell
-dlg run -f brief.md --budget 10m --policy review
-```
-
-Inspect the receipt:
-
-```shell
-dlg result <runId>
-dlg logs <runId>
-```
-
-Apply or undo:
-
-```shell
-dlg apply <runId>
-dlg undo <runId>
-```
-
-Run a specific model handle:
+Target one worker with a `[runtime/]provider/model` handle; compare receipts to pit workers against
+each other:
 
 ```shell
 dlg run -w local/qwen3-coder -f brief.md
-dlg run -w opencode/opencode/north-mini-code-free -f brief.md
 dlg run -w api/openai/gpt-5.5 -f brief.md --effort high
-```
-
-## Common workflows
-
-### Claude Code as architect
-
-Claude Code keeps the plan, judgment, and review loop. Delegator lets it send
-bounded implementation slices to any configured executor.
-
-```shell
-dlg skill install claude-code --project
-```
-
-### Codex as architect
-
-Codex keeps the high-level session. Delegator can still run other Codex
-profiles, local models, OpenCode, API executors, and other CLI agents in separate
-runs.
-
-```shell
-dlg skill install codex --project
-```
-
-### Any AGENTS.md-reading host
-
-```shell
-dlg skill install agents-md --project
-```
-
-This is the broad compatibility path for hosts that read repository
-instructions.
-
-### Skills: host instructions vs executor equipment
-
-Delegator has two different skill paths:
-
-| Skill path | What it does |
-| --- | --- |
-| `dlg skill install ...` | Teaches the architect when and how to call Delegator |
-| `equip.skills` | Loads a skill into a spawned executor, when that runtime supports skill loading |
-
-So the architect can use a Delegator instruction pack, while a selected executor
-can also receive its own task-specific skill.
-
-### Compare executors
-
-```shell
-dlg run -w local/qwen3-coder -f brief.md --policy review
-dlg run -w opencode/opencode/north-mini-code-free -f brief.md --policy review
 dlg compare-runs <id1> <id2>
-```
-
-Use this when you want competing patches and a structured comparison.
-
-### Update Delegator
-
-```shell
-delegator update
 ```
 
 ## Security model
 
-Delegator assumes executors are useful but not fully trusted.
+Delegator assumes workers are useful but not fully trusted.
 
-- Runtime state lives outside the repository under `~/.delegator/projects/...`.
-- Untracked files such as `.env` are not copied into run worktrees.
-- API keys live in `~/.delegator/secrets.yaml`, not in project config.
-- An executor receives only the credential material needed for its own provider.
-- Verification is performed by Delegator, not accepted from executor prose.
-- Sensitive or risky diffs can force human review.
+- Runtime state lives outside the repo, under `~/.delegator/projects/...`.
+- Untracked files such as `.env` are never copied into a worktree.
+- API keys live in `~/.delegator/secrets.yaml`, never in project config; a worker receives only its
+  own provider's credential.
+- Delegator never touches your logins — it only spawns worker CLIs.
+- Verification is run by Delegator, never accepted from worker prose.
+- A diff that edits tests, test config, CI, snapshots, fixtures, or lockfiles is flagged for review
+  and never auto-applied.
+
+[docs/verification-model.md](docs/verification-model.md) — how verification stays honest.
 
 ## Documentation
 
 | Document | Purpose |
 | --- | --- |
-| [docs/QUICKSTART.md](docs/QUICKSTART.md) | **Start here** — install, add a worker, first run, reset/uninstall |
-| [docs/CONFIG.md](docs/CONFIG.md) | Provider, model, runtime, secret, and project config |
-| [docs/USAGE.md](docs/USAGE.md) | Host integration and CLI workflows |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Components, lifecycle, statuses, and trust model |
-| [docs/MODEL-GUIDE.md](docs/MODEL-GUIDE.md) | How to think about model/provider choices |
-| [docs/verification-model.md](docs/verification-model.md) | How verification stays separate from executor claims |
-| [docs/GLOSSARY.md](docs/GLOSSARY.md) | Public terms: orchestrator, worker, runtime, handle, envelope, receipt |
-| [examples/providers.example.yaml](examples/providers.example.yaml) | Annotated provider config recipe |
+| [Quickstart](docs/QUICKSTART.md) | Install, add a worker, first run, reset |
+| [Config](docs/CONFIG.md) | Provider, model, runtime, secret, and project config |
+| [Usage](docs/USAGE.md) | Host integration and CLI workflows |
+| [Model guide](docs/MODEL-GUIDE.md) | Which model or provider for which kind of task |
+| [Architecture](docs/ARCHITECTURE.md) | Components, lifecycle, statuses, trust model |
+| [Verification model](docs/verification-model.md) | How verification stays separate from worker claims |
+| [Glossary](docs/GLOSSARY.md) | Orchestrator, worker, runtime, handle, envelope, receipt |
+| [Provider config recipe](examples/providers.example.yaml) | Annotated, copy-paste provider and secret config |
 
-## Non-goals
+## FAQ
 
-Delegator is not an agent framework, not a proxy for all model traffic, and not a
-replacement for Claude Code, Codex, OpenCode, Ollama, or LM Studio.
+**Is this an agent framework, or a 1000-in-1 super-agent?** Neither. It hands bounded tasks to the
+models and agents you already run. It does not replace Claude Code, Codex, OpenCode, Ollama, or LM Studio.
 
-It is the dispatch layer between a coding architect and the execution capacity
-already available on your machine.
+**Why not just configure another model inside Codex?** Use a model picker when one agent on one model
+is the right workflow. Delegator is one architect assigning bounded work to many executors, then
+comparing verified receipts.
 
-The core makes no LLM routing or planning decisions: it does not call an LLM to
-decide what to do. The host agent or human remains responsible for planning,
-routing, review, and final judgment.
+**Does the core call an LLM to route or plan?** No — you or your host agent choose the worker. The
+core dispatches, bounds, isolates, and verifies. Fallback between workers is deterministic.
+
+**Does it give me free model access?** No. You bring the subscriptions, API keys, or accounts;
+Delegator makes that access bounded, isolated, and verifiable.
+
+## Contributing
+
+Issues and pull requests welcome. `npm run build` to build, `npm test` to run the suite.
 
 ## License
 
