@@ -1,0 +1,82 @@
+<svg viewBox="0 0 850 544" xmlns="http://www.w3.org/2000/svg" role="img" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">
+  <title>Delegator dispatches to any agent and model you have, and runs alongside your harness's own native subagents</title>
+  <desc>Your favorite harness keeps using its own native subagents in your pool for judgment, and at the same time sends a task or question to Delegator, which dispatches it to any agent and model you already have on separate pools. Every delegated result returns verified by your own build and tests, and the architect decides. Native subagents and Delegator workers run together — no either/or.</desc>
+
+  <style>
+    :root { --ink:#0f172a; --muted:#64748b; --bg:#ffffff; --accent:#2563eb; --border:#94a3b8; }
+    @media (prefers-color-scheme: dark) {
+      :root { --ink:#e6edf3; --muted:#9aa7b4; --bg:#161b22; --accent:#58a6ff; --border:#30363d; }
+    }
+    .ink{fill:var(--ink)} .muted{fill:var(--muted)} .accent{fill:var(--accent)}
+    .box{fill:var(--bg);stroke:var(--border)} .sink{stroke:var(--ink)} .sacc{stroke:var(--accent)}
+  </style>
+
+  <defs>
+    <marker id="n4" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--muted)"/></marker>
+    <marker id="b4" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--accent)"/></marker>
+  </defs>
+
+  <rect x="16" y="36" width="198" height="80" rx="10" class="box" stroke-width="1.5" stroke-dasharray="5 4"/>
+  <text x="115" y="60" text-anchor="middle" font-size="12" font-weight="700" class="ink">Your own native subagents</text>
+  <text x="115" y="79" text-anchor="middle" font-size="10" class="muted">Claude Task · Codex agents · same pool</text>
+  <text x="115" y="96" text-anchor="middle" font-size="10" class="muted">in-process · for judgment near the session</text>
+  <text x="115" y="110" text-anchor="middle" font-size="9" class="muted">(keep using them — no conflict)</text>
+  <line x1="100" y1="116" x2="93" y2="182" stroke="var(--muted)" stroke-width="1.6" marker-start="url(#n4)" marker-end="url(#n4)"/>
+
+  <rect x="18" y="184" width="150" height="104" rx="12" class="box sink" stroke-width="2"/>
+  <text x="93" y="214" text-anchor="middle" font-size="13" font-weight="700" class="ink">Your favorite harness</text>
+  <text x="93" y="234" text-anchor="middle" font-size="11.5" class="muted">the architect</text>
+  <text x="93" y="254" text-anchor="middle" font-size="11" class="muted">Claude Code · Codex · you</text>
+  <text x="93" y="272" text-anchor="middle" font-size="11" class="muted">plans · decides</text>
+
+  <line x1="168" y1="214" x2="234" y2="214" stroke="var(--muted)" stroke-width="2" marker-end="url(#n4)"/>
+  <text x="201" y="200" text-anchor="middle" font-size="10.5" font-weight="600" class="muted">a task</text>
+  <text x="201" y="230" text-anchor="middle" font-size="9.5" class="muted">or a question</text>
+
+  <rect x="234" y="192" width="132" height="88" rx="12" class="box sacc" stroke-width="2.5"/>
+  <text x="300" y="222" text-anchor="middle" font-size="14" font-weight="700" class="ink">Delegator</text>
+  <text x="300" y="244" text-anchor="middle" font-size="11" class="muted">route · isolate</text>
+  <text x="300" y="261" text-anchor="middle" font-size="11" class="muted">bound · verify</text>
+
+  <line x1="366" y1="222" x2="450" y2="222" stroke="var(--muted)" stroke-width="2" marker-end="url(#n4)"/>
+  <text x="408" y="214" text-anchor="middle" font-size="10.5" font-weight="600" class="muted">dispatch</text>
+  <text x="408" y="238" text-anchor="middle" font-size="9.5" class="muted">separate pools</text>
+
+  <rect x="450" y="14" width="386" height="404" rx="14" fill="none" class="sink" stroke-width="2"/>
+  <text x="643" y="40" text-anchor="middle" font-size="13" font-weight="700" class="ink">Any agent · any model you already have</text>
+
+  <g>
+    <rect x="464" y="54" width="358" height="62" rx="8" class="box" stroke-width="1.3"/>
+    <text x="478" y="78" font-size="12.5" font-weight="700" class="ink">Local · Ollama / LM Studio</text>
+    <text x="478" y="100" font-size="11" class="muted">qwen3-coder · any local GGUF · fully offline</text>
+    <text x="808" y="88" text-anchor="end" font-size="12" font-weight="700" class="accent">✓</text>
+
+    <rect x="464" y="124" width="358" height="62" rx="8" class="box" stroke-width="1.3"/>
+    <text x="478" y="148" font-size="12.5" font-weight="700" class="ink">Free account / pool</text>
+    <text x="478" y="170" font-size="11" class="muted">free-tier models · zero cost</text>
+    <text x="808" y="158" text-anchor="end" font-size="12" font-weight="700" class="accent">✓</text>
+
+    <rect x="464" y="194" width="358" height="62" rx="8" class="box" stroke-width="1.3"/>
+    <text x="478" y="218" font-size="12.5" font-weight="700" class="ink">Codex · ChatGPT <tspan font-weight="400" class="muted">(your subscription)</tspan></text>
+    <text x="478" y="240" font-size="11" class="muted">gpt-5.5 high|xhigh · gpt-5.4-mini · …</text>
+    <text x="808" y="228" text-anchor="end" font-size="12" font-weight="700" class="accent">✓</text>
+
+    <rect x="464" y="264" width="358" height="62" rx="8" class="box" stroke-width="1.3"/>
+    <text x="478" y="288" font-size="12.5" font-weight="700" class="ink">Claude Code · GLM <tspan font-weight="400" class="muted">(api key)</tspan></text>
+    <text x="478" y="310" font-size="11" class="muted">glm-5.2 · glm-5.2[1m] · glm-5-turbo</text>
+    <text x="808" y="298" text-anchor="end" font-size="12" font-weight="700" class="accent">✓</text>
+
+    <rect x="464" y="334" width="358" height="62" rx="8" class="box" stroke-width="1.3"/>
+    <text x="478" y="358" font-size="12.5" font-weight="700" class="ink">Claude Code · Opus <tspan font-weight="400" class="muted">(your subscription)</tspan></text>
+    <text x="478" y="380" font-size="11" class="muted">opus · sonnet · haiku</text>
+    <text x="808" y="368" text-anchor="end" font-size="12" font-weight="700" class="accent">✓</text>
+  </g>
+
+  <polyline points="643,418 643,444 93,444 93,288" fill="none" stroke="var(--accent)" stroke-width="2.5" marker-end="url(#b4)"/>
+  <text x="368" y="437" text-anchor="middle" font-size="11.5" font-weight="700" class="accent">every result comes back verified — your build / tests</text>
+  <text x="368" y="461" text-anchor="middle" font-size="11.5" class="ink">→ the architect decides: apply · compare · undo · discard</text>
+
+  <line x1="40" y1="478" x2="810" y2="478" stroke="var(--border)" stroke-width="1" stroke-dasharray="2 3"/>
+  <text x="425" y="497" text-anchor="middle" font-size="11.5" class="ink">Native subagents (your pool) <tspan font-weight="700">and</tspan> Delegator workers (separate pools) run together — no either/or.</text>
+  <text x="425" y="521" text-anchor="middle" font-size="11" class="muted">One prompt to a council of several, compared — instead of pasting the same thing into five chats.</text>
+</svg>

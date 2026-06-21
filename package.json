@@ -1,0 +1,70 @@
+{
+  "name": "@rizias/delegator",
+  "version": "0.3.19",
+  "private": false,
+  "description": "Dispatch bounded coding tasks from your main AI agent to separate model pools, then verify the patches locally.",
+  "author": "Max Smirnov",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rizias/delegator.git"
+  },
+  "bugs": {
+    "url": "https://github.com/rizias/delegator/issues"
+  },
+  "homepage": "https://github.com/rizias/delegator#readme",
+  "keywords": [
+    "ai",
+    "coding-agent",
+    "codex",
+    "claude-code",
+    "opencode",
+    "llm",
+    "local-models",
+    "automation"
+  ],
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "dlg": "./dist/cli.js",
+    "delegator": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "adapters",
+    "CHANGELOG.md",
+    "docs/logo.png",
+    "docs/QUICKSTART.md",
+    "docs/ARCHITECTURE.md",
+    "docs/CONFIG.md",
+    "docs/USAGE.md",
+    "docs/MODEL-GUIDE.md",
+    "docs/verification-model.md",
+    "docs/GLOSSARY.md",
+    "docs/architecture.svg",
+    "examples",
+    "runtimes.default.yaml",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "node scripts/clean.mjs && tsc -p tsconfig.build.json",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "prepack": "npm run build",
+    "prepublishOnly": "npm test",
+    "test": "npm run build && node --test"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "commander": "^13.1.0",
+    "yaml": "^2.7.0",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0"
+  }
+}

@@ -1,0 +1,7 @@
+# delegator's OWN project config (the one config file that belongs in the repo).
+# Dogfoods the verify pipeline: when a worker is dispatched on this repo, delegator runs these
+# commands IN the worker's worktree against the patch it produced. node_modules is linked into the
+# worktree automatically (it is gitignored, so a git worktree lacks it), so build/test resolve deps.
+verify:
+  build: npm run build
+  test: node --test "tests/*.test.mjs"

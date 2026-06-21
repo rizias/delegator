@@ -1,0 +1,8 @@
+# build output & dependencies
+node_modules/
+dist/
+*.tgz
+*.log
+
+# delegator runtime state — lives in ~/.delegator, never in the repo
+.delegator/

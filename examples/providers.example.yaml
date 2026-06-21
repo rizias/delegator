@@ -1,0 +1,151 @@
+# delegator provider registry - annotated example. Full reference: docs/CONFIG.md
+#
+# Shape:
+#   provider = where requests go (endpoint, auth type, model list).
+#   model    = one model id declared under exactly one provider entry.
+#   handle   = provider/model, for example anthropic/claude-opus-4-8.
+#   runtime  = what launches the work; inferred from protocol/auth or defaultRuntime.
+#
+# API keys do NOT belong here. Put key values in ~/.delegator/secrets.yaml.
+# keyEnv is only the NAME of an environment variable, not the key value. Make it THIS provider's
+# own var, never a generic one already in your shell — else a stray value (e.g. OPENAI_API_KEY) is
+# silently used as a wrong-key fallback for another provider.
+#
+# Per-model fallback is tried only when the selected model cannot run because the
+# provider/key/runtime is unavailable. fallback can be one handle or a list.
+# Legacy kind: plus workers:/tiers: still load for old configs, but the shape
+# below is preferred for new configs.
+
+version: 1
+
+defaults:
+  model: anthropic/claude-opus-4-8
+  policy: review
+  isolation: worktree
+  budget:
+    wallClock: 15m           # primary ceiling: max run time before the worker is stopped
+  checkpointSeconds: 90
+  stallSeconds: 300
+  silenceKillSeconds: 600
+  keepRuns: 30                      # finished-run receipts kept per project (light: envelope + patch.diff + logs)
+  worktreeRetention: keep-unfinished # heavy git checkout: drop on success, keep for killed/failed (recoverable);
+                                     # other values: on-finish (always drop) | keep (only keepRuns prunes it)
+  queueTimeoutSeconds: 1800
+  queuePollSeconds: 3
+  retries:
+    rateLimit: 3
+    server: 2
+  breaker:
+    failures: 3
+    cooldown: 10m
+  keyCooldown: 15m
+
+privacy:
+  sensitivePaths:
+    - "**/.github/workflows/**"
+    - "**/package.json"
+    - "**/pom.xml"
+    - "**/*.lock"
+
+providers:
+  # → runtime: claude
+  # Uses your logged-in Claude Code subscription. No API key is stored here.
+  anthropic:
+    protocol: anthropic
+    auth: subscription
+    maxConcurrent: 1
+    models:
+      claude-opus-4-8:
+        contextWindow: 1000000
+        budget:
+          wallClock: 20m        # this worker gets more wall-clock
+        fallback:
+          - openai/gpt-5.5
+          # an opencode handle: provider "opencode" + a slash-bearing model id (explained at the opencode provider below)
+          - opencode/opencode/north-mini-code-free
+      claude-sonnet-4-6:
+        contextWindow: 1000000
+      claude-haiku-4-5:
+        contextWindow: 200000
+
+  # → runtime: claude   (z.ai / GLM via the claude CLI pointed at z.ai's anthropic endpoint)
+  # The same claude CLI serves native Claude (above) AND z.ai/GLM here — only endpoint + key differ.
+  # WARNING: z.ai is a Chat-Completions API on its OpenAI side. Codex speaks ONLY the Responses API,
+  #   so a z.ai/GLM provider CANNOT run through the `codex` runtime — use this `claude` path (or an
+  #   `api` provider on z.ai's /chat/completions), never codex.
+  zai:
+    protocol: anthropic
+    auth: api-key
+    baseUrl: https://api.z.ai/api/anthropic   # z.ai's anthropic-compatible endpoint
+    keyEnv: ZAI_API_KEY                        # NAME only; the actual key goes in secrets.yaml
+    maxConcurrent: 1                           # z.ai limits are per-model — set yours: https://z.ai/manage-apikey/rate-limits
+    models:
+      glm-5.2:
+        contextWindow: 200000
+      glm-5.2[1m]:
+        contextWindow: 1000000
+
+  # → runtime: api
+  # OpenAI-compatible HTTP API. keyEnv names the environment variable fallback.
+  openai:
+    protocol: openai
+    auth: api-key
+    baseUrl: https://api.openai.com/v1
+    keyEnv: OPENAI_API_KEY
+    maxConcurrent: 2
+    models:
+      gpt-5.5:
+        contextWindow: 128000
+        reasoningEffort:
+          levels: [minimal, low, medium, high]
+          default: medium
+        budget:
+          wallClock: 15m
+        limits:
+          concurrent: 1
+        fallback:
+          - opencode/opencode/north-mini-code-free
+          - local/gpt-5.5
+
+  # → runtime: codex   (the codex CLI on your ChatGPT / Codex login — no key stored here)
+  # openai + subscription matches BOTH the codex and pi runtimes → pin defaultRuntime.
+  # NOTE: codex speaks ONLY the OpenAI Responses API; it cannot target Chat-Completions-only vendors
+  #   (z.ai/GLM, etc.) — for those use the `claude` or `api` runtime, not codex.
+  openai-codex:
+    protocol: openai
+    auth: subscription
+    defaultRuntime: codex
+    maxConcurrent: 3
+    models:
+      gpt-5.5:
+        reasoningEffort:
+          levels: [minimal, low, medium, high, xhigh]
+          default: high
+
+  # → runtime: api
+  # Local OpenAI-compatible endpoint. Same model id as openai/gpt-5.5, different provider.
+  local:
+    protocol: openai
+    auth: none
+    baseUrl: http://localhost:1234/v1
+    maxConcurrent: 1
+    models:
+      gpt-5.5:
+        contextWindow: 32768
+      qwen3-coder:
+        contextWindow: 65536
+        reasoningEffort: high
+
+  # → runtime: opencode
+  # Uses your logged-in OpenCode subscription. OpenCode model ids carry a slash
+  # (e.g. opencode/north-mini-code-free), so the full handle doubles the word:
+  #   provider "opencode" + model "opencode/north-mini-code-free"
+  #   = handle  opencode/opencode/north-mini-code-free   (the fallback target used above)
+  opencode:
+    protocol: opencode
+    auth: subscription
+    maxConcurrent: 1
+    models:
+      opencode/north-mini-code-free:
+        contextWindow: 64000
+        fallback: local/gpt-5.5

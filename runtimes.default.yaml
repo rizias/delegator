@@ -1,0 +1,181 @@
+# delegator built-in runtime descriptors (a shell is config, not code).
+# Loaded at runtime. Copy to ~/.delegator/runtimes.yaml (dlg init does this) to edit or add agents.
+# Each runtime: command + args (with {{placeholders}}) + prompt.mode (stdin|argv-last|file) + parser.
+# Adding a new agent = a new block here (+ a parser preset only if its output format is novel).
+
+runtimes:
+  claude:
+    mode: command
+    command: claude
+    protocol: anthropic
+    auth:
+      - api-key
+      - subscription
+    # The claude CLI's own subscription login rides host env vars in these namespaces. delegator's
+    # credential denylist would otherwise strip them (-> 401). Preserved ONLY for auth: subscription;
+    # an api-key worker (e.g. z.ai on the claude runtime) still gets the host stripped and its key via
+    # secrets, so your Claude login never leaks to another provider's worker.
+    authEnv:
+      - ANTHROPIC
+      - CLAUDE
+    effortLevels:
+      levels: [low, medium, high, xhigh]
+      default: medium
+    args:
+      - -p
+      - --output-format
+      - stream-json
+      - --verbose
+      - --permission-mode
+      - "{{permissionMode:bypassPermissions}}"
+      - - --model
+        - "{{model.id}}"
+      - - --effort
+        - "{{reasoningEffort}}"
+      - --disallowedTools
+      - Task
+      - --append-system-prompt
+      - "{{worktreeBoundaryPrompt}}"
+    env:
+      ANTHROPIC_BASE_URL: "{{provider.baseUrl}}"
+      ANTHROPIC_AUTH_TOKEN: "{{secret(provider.id)}}"
+      # Per-request HTTP timeout = this run's wall-clock budget, so a single (possibly slow, e.g. z.ai)
+      # API call is never cut SHORTER than the run is allowed to live; delegator's own wall-clock killer
+      # remains the authority. (z.ai's Claude-Code guide recommends a long API_TIMEOUT_MS; tying it to
+      # the budget avoids a fixed value conflicting with shorter/longer run budgets.)
+      API_TIMEOUT_MS: "{{budget.wallClockMs}}"
+      ANTHROPIC_MODEL: "{{model.id}}"
+      ANTHROPIC_SMALL_FAST_MODEL: "{{model.id}}"
+      ANTHROPIC_DEFAULT_OPUS_MODEL: "{{model.id}}"
+      ANTHROPIC_DEFAULT_SONNET_MODEL: "{{model.id}}"
+      ANTHROPIC_DEFAULT_HAIKU_MODEL: "{{model.id}}"
+    prompt:
+      mode: stdin
+    parser: builtin:claude-stream-json-events
+  codex:
+    mode: command
+    command: codex
+    protocol: openai
+    auth: subscription
+    effortLevels:
+      levels: [minimal, low, medium, high, xhigh]
+      default: medium
+    args:
+      - exec
+      - --json
+      - --sandbox
+      - workspace-write
+      - - -m
+        - "{{model.id}}"
+      - - -c
+        - model_reasoning_effort="{{reasoningEffort}}"
+      - "-"
+    prompt:
+      mode: stdin
+    parser: builtin:codex-exec-json-events
+  opencode:
+    mode: command
+    command: opencode
+    protocol: opencode
+    auth: subscription
+    effortLevels:
+      levels: [low, medium, high, xhigh]
+      default: medium
+    args:
+      - run
+      - --format
+      - json
+      - --dangerously-skip-permissions
+      - - -m
+        - "{{model.id}}"
+      - - --variant
+        - "{{reasoningEffort}}"
+    env:
+      PWD: "{{worktree}}"
+    prompt:
+      mode: argv-last
+    parser: builtin:opencode-run-json-events
+  pi:
+    mode: command
+    command: pi
+    protocol: openai
+    auth: subscription
+    effortLevels:
+      levels: [low, medium, high, xhigh]
+      default: medium
+    args:
+      - --print
+      - --mode
+      - json
+      - --no-session
+      - --provider
+      - "{{provider.id}}"
+      - --model
+      - "{{provider.id}}/{{model.id}}"
+      - --thinking
+      - "{{reasoningEffort:medium}}"
+      - --append-system-prompt
+      - "{{worktreeBoundaryPrompt}}"
+    prompt:
+      mode: stdin
+    parser: builtin:pi-json-events
+  api:
+    mode: direct-api
+    protocol: openai
+    auth:
+      - api-key
+      - none
+    effortLevels:
+      levels: [minimal, low, medium, high]
+      default: medium
+    request:
+      method: POST
+      path: /chat/completions
+      headers:
+        content-type: application/json
+        Authorization: "Bearer {{secret(provider.id)}}"
+      json:
+        model: "{{model.id}}"
+        messages:
+          - role: user
+            content: "{{brief}}"
+        stream: false
+    output: { parser: builtin:openai-chat }
+
+  # openai-responses:
+  #   mode: direct-api
+  #   protocol: openai
+  #   auth: api-key
+  #   request:
+  #     method: POST
+  #     path: /responses
+  #     headers:
+  #       content-type: application/json
+  #       Authorization: "Bearer {{secret(provider.id)}}"
+  #     json:
+  #       model: "{{model.id}}"
+  #       input: "{{brief}}"
+  #       reasoning: { effort: "{{reasoningEffort:medium}}" }
+  #   output: { parser: builtin:openai-chat }   # only builtin:openai-chat ships today; the /responses
+  #                                              # shape differs — add a matching parser preset in
+  #                                              # src/parsers/ + registry.ts before using this endpoint
+
+  # anthropic-messages:
+  #   mode: direct-api
+  #   protocol: anthropic
+  #   auth: api-key
+  #   request:
+  #     method: POST
+  #     path: /v1/messages
+  #     headers:
+  #       x-api-key: "{{secret(provider.id)}}"
+  #       anthropic-version: "2023-06-01"
+  #     json:
+  #       model: "{{model.id}}"
+  #       max_tokens: "{{maxTokens:4096}}"
+  #       messages:
+  #         - role: user
+  #           content: "{{brief}}"
+  #   output: { parser: builtin:openai-chat }   # only builtin:openai-chat ships today; the Anthropic
+  #                                              # /messages shape differs — add a matching parser preset
+  #                                              # in src/parsers/ + registry.ts before using this endpoint
