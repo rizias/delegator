@@ -4,6 +4,12 @@ All notable changes to Delegator are documented here. This project adheres to
 [Semantic Versioning](https://semver.org), and the format is based on
 [Keep a Changelog](https://keepachangelog.com).
 
+## [0.3.21] — 2026-06-21
+
+### Fixed
+- **Windows:** the background update check and `dlg update` did nothing silently
+  (Node refuses to spawn `npm.cmd` without a shell). Both now pass `shell` on Windows.
+
 ## [0.3.20] — 2026-06-21
 
 ### Docs

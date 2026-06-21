@@ -71,6 +71,7 @@ try {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'ignore'],
     windowsHide: true,
+    shell: process.platform === 'win32',
   });
   const latest = String(r.stdout || '').trim().split(/\\s+/).pop();
   if (r.status === 0 && /^\\d+\\.\\d+\\.\\d+/.test(latest || '')) {
@@ -175,6 +176,7 @@ defineCommand('update')
       stdio: ['inherit', opts.json ? 'ignore' : 'inherit', 'pipe'],
       encoding: 'utf8',
       windowsHide: false,
+      shell: process.platform === 'win32',
     });
     if (r.status === 0) {
       emit({ updated: true, package: UPDATE_PACKAGE }, () => {
