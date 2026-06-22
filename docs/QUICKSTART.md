@@ -165,7 +165,8 @@ npm uninstall -g @rizias/delegator
 
 ```bash
 rm -rf ~/.claude/skills/delegator      # Claude Code  (project install: ./.claude/skills/delegator)
-rm ~/.codex/CODEX-SKILL.md             # Codex        (project install: ./.codex/CODEX-SKILL.md)
+rm -rf ~/.agents/skills/delegator      # Codex        (project install: ./.agents/skills/delegator)
+rm ~/.codex/CODEX-SKILL.md             # Legacy Codex pack from delegator <=0.3.21
 # AGENTS.md: delete the block between the  delegator:begin  and  delegator:end  markers
 ```
 

@@ -680,7 +680,7 @@ function adapterPath(...segments: string[]): string {
   return path.join(here, '..', 'adapters', ...segments);
 }
 
-const skillCmd = defineCommand('skill')
+const skillCmd = program.command('skill')
   .description('install HOST instruction packs (teach an orchestrator when/how to delegate) — NOT the per-worker equip.skills CLI toggles');
 
 // Generic AGENTS.md is an explicit host instruction pack, separate from worker
@@ -736,15 +736,16 @@ skillCmd
         return;
       }
       if (host === 'codex') {
-        const src = adapterPath('codex', 'CODEX-SKILL.md');
-        const dest = opts.project
-          ? path.join(process.cwd(), '.codex', 'CODEX-SKILL.md')
-          : path.join(os.homedir(), '.codex', 'CODEX-SKILL.md');
-        fs.mkdirSync(path.dirname(dest), { recursive: true });
+        const src = adapterPath('codex', 'skills', 'delegator', 'SKILL.md');
+        const destDir = opts.project
+          ? path.join(process.cwd(), '.agents', 'skills', 'delegator')
+          : path.join(os.homedir(), '.agents', 'skills', 'delegator');
+        fs.mkdirSync(destDir, { recursive: true });
+        const dest = path.join(destDir, 'SKILL.md');
         fs.copyFileSync(src, dest);
         emit({ host, installed: true, path: dest, project: Boolean(opts.project) }, () => {
-          console.log(`installed instructions: ${dest}`);
-          console.log('Codex sessions will read this CODEX-SKILL.md and know how to use delegator.');
+          console.log(`installed skill: ${dest}`);
+          console.log('Codex sessions now know when and how to use delegator ($delegator).');
         }, opts.json);
         return;
       }

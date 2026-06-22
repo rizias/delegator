@@ -4,6 +4,13 @@ All notable changes to Delegator are documented here. This project adheres to
 [Semantic Versioning](https://semver.org), and the format is based on
 [Keep a Changelog](https://keepachangelog.com).
 
+## [Unreleased]
+
+### Fixed
+- `dlg skill install codex` now installs a real Codex skill under
+  `.agents/skills/delegator/SKILL.md` instead of the ignored legacy
+  `.codex/CODEX-SKILL.md` file.
+
 ## [0.3.21] — 2026-06-21
 
 ### Fixed

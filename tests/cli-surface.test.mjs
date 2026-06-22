@@ -77,29 +77,41 @@ test('skill help distinguishes host instruction packs from worker runtime equipm
   assert.match(r.stdout, /NOT the per-worker equip\.skills CLI toggles/);
 });
 
-test('codex skill install targets CODEX-SKILL.md, not AGENTS.md', () => {
-  const adapterDir = path.join(root, 'adapters', 'codex');
-  const adapterFile = path.join(adapterDir, 'CODEX-SKILL.md');
-  const hadDir = fs.existsSync(adapterDir);
-  const hadFile = fs.existsSync(adapterFile);
-  const previous = hadFile ? fs.readFileSync(adapterFile, 'utf8') : '';
-  fs.mkdirSync(adapterDir, { recursive: true });
-  fs.writeFileSync(adapterFile, '# codex pack\n', 'utf8');
+test('skill show accepts --json on the nested command', () => {
+  const r = runCli(['skill', 'show', '--json']);
+  assert.equal(r.status, 0);
+  assert.match(JSON.parse(r.stdout).text, /delegator:begin/);
+});
+
+test('shipped codex adapter is a valid Codex skill', () => {
+  const adapterFile = path.join(root, 'adapters', 'codex', 'skills', 'delegator', 'SKILL.md');
+  const text = fs.readFileSync(adapterFile, 'utf8');
+  assert.match(text, /^---\n/);
+  assert.match(text, /^name: delegator$/m);
+  assert.match(text, /^description: .+/m);
+  assert.match(text, /\n---\n/);
+});
+
+test('codex skill install targets .agents skills, not legacy instruction files', () => {
+  const adapterFile = path.join(root, 'adapters', 'codex', 'skills', 'delegator', 'SKILL.md');
+  const adapterText = fs.readFileSync(adapterFile, 'utf8');
   const project = fs.mkdtempSync(path.join(os.tmpdir(), 'dlg-codex-project-'));
-  try {
-    const r = spawnSync(process.execPath, [path.join(root, 'dist', 'cli.js'), 'skill', 'install', 'codex', '--project'], {
-      cwd: project,
-      encoding: 'utf8',
-      env: { ...process.env, CI: '1', DELEGATOR_HOME: fs.mkdtempSync(path.join(os.tmpdir(), 'dlg-codex-home-')) },
-    });
-    assert.equal(r.status, 0, r.stderr);
-    assert.equal(fs.readFileSync(path.join(project, '.codex', 'CODEX-SKILL.md'), 'utf8'), '# codex pack\n');
-    assert.equal(fs.existsSync(path.join(project, 'AGENTS.md')), false);
-  } finally {
-    if (hadFile) fs.writeFileSync(adapterFile, previous, 'utf8');
-    else fs.rmSync(adapterFile, { force: true });
-    if (!hadDir) fs.rmSync(adapterDir, { recursive: true, force: true });
-  }
+  const r = spawnSync(process.execPath, [path.join(root, 'dist', 'cli.js'), 'skill', 'install', 'codex', '--project', '--json'], {
+    cwd: project,
+    encoding: 'utf8',
+    env: { ...process.env, CI: '1', DELEGATOR_HOME: fs.mkdtempSync(path.join(os.tmpdir(), 'dlg-codex-home-')) },
+  });
+  assert.equal(r.status, 0, r.stderr);
+  const installed = path.join(project, '.agents', 'skills', 'delegator', 'SKILL.md');
+  assert.deepEqual(JSON.parse(r.stdout), {
+    host: 'codex',
+    installed: true,
+    path: installed,
+    project: true,
+  });
+  assert.equal(fs.readFileSync(installed, 'utf8'), adapterText);
+  assert.equal(fs.existsSync(path.join(project, 'AGENTS.md')), false);
+  assert.equal(fs.existsSync(path.join(project, '.codex', 'CODEX-SKILL.md')), false);
 });
 
 test('read commands accept --json and emit parseable JSON', () => {
