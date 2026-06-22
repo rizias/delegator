@@ -736,15 +736,18 @@ skillCmd
         return;
       }
       if (host === 'codex') {
-        const src = adapterPath('codex', 'CODEX-SKILL.md');
-        const dest = opts.project
-          ? path.join(process.cwd(), '.codex', 'CODEX-SKILL.md')
-          : path.join(os.homedir(), '.codex', 'CODEX-SKILL.md');
-        fs.mkdirSync(path.dirname(dest), { recursive: true });
+        // Codex discovers skills exactly like Claude Code: a skills/<name>/SKILL.md tree
+        // (Codex scans ~/.codex/skills and .codex/skills).
+        const src = adapterPath('codex', 'skills', 'delegator', 'SKILL.md');
+        const destDir = opts.project
+          ? path.join(process.cwd(), '.codex', 'skills', 'delegator')
+          : path.join(os.homedir(), '.codex', 'skills', 'delegator');
+        fs.mkdirSync(destDir, { recursive: true });
+        const dest = path.join(destDir, 'SKILL.md');
         fs.copyFileSync(src, dest);
         emit({ host, installed: true, path: dest, project: Boolean(opts.project) }, () => {
-          console.log(`installed instructions: ${dest}`);
-          console.log('Codex sessions will read this CODEX-SKILL.md and know how to use delegator.');
+          console.log(`installed skill: ${dest}`);
+          console.log('new Codex sessions now know when and how to use delegator (/delegator).');
         }, opts.json);
         return;
       }

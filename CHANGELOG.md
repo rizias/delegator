@@ -4,6 +4,17 @@ All notable changes to Delegator are documented here. This project adheres to
 [Semantic Versioning](https://semver.org), and the format is based on
 [Keep a Changelog](https://keepachangelog.com).
 
+## [0.3.22] — 2026-06-22
+
+### Fixed
+- **Codex skill install:** `dlg skill install codex` now installs to
+  `~/.codex/skills/delegator/SKILL.md` (with YAML frontmatter) — the standard
+  skill layout Codex actually discovers, matching `claude-code`. It previously
+  wrote a bare `CODEX-SKILL.md` at the `.codex` root that Codex never loaded.
+  `--project` installs to `.codex/skills/delegator/SKILL.md`. Thanks to
+  [@Noviel](https://github.com/Noviel) ([#1](https://github.com/rizias/delegator/pull/1))
+  for independently catching and fixing this, and for the frontmatter regression test.
+
 ## [0.3.21] — 2026-06-21
 
 ### Fixed

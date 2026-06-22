@@ -77,9 +77,20 @@ test('skill help distinguishes host instruction packs from worker runtime equipm
   assert.match(r.stdout, /NOT the per-worker equip\.skills CLI toggles/);
 });
 
-test('codex skill install targets CODEX-SKILL.md, not AGENTS.md', () => {
-  const adapterDir = path.join(root, 'adapters', 'codex');
-  const adapterFile = path.join(adapterDir, 'CODEX-SKILL.md');
+// The shipped codex pack must be a discoverable Codex skill: valid YAML frontmatter
+// (name + description) or Codex never surfaces it. CRLF is normalized so the guard
+// holds on Windows checkouts — a literal \n match would be brittle.
+test('shipped codex adapter is a valid Codex skill (SKILL.md frontmatter)', () => {
+  const text = fs.readFileSync(path.join(root, 'adapters', 'codex', 'skills', 'delegator', 'SKILL.md'), 'utf8').replace(/\r\n/g, '\n');
+  assert.match(text, /^---\n/);
+  assert.match(text, /^name: delegator$/m);
+  assert.match(text, /^description: .+/m);
+  assert.match(text, /\n---\n/);
+});
+
+test('codex skill install targets skills/delegator/SKILL.md, leaves AGENTS.md', () => {
+  const adapterDir = path.join(root, 'adapters', 'codex', 'skills', 'delegator');
+  const adapterFile = path.join(adapterDir, 'SKILL.md');
   const hadDir = fs.existsSync(adapterDir);
   const hadFile = fs.existsSync(adapterFile);
   const previous = hadFile ? fs.readFileSync(adapterFile, 'utf8') : '';
@@ -93,7 +104,7 @@ test('codex skill install targets CODEX-SKILL.md, not AGENTS.md', () => {
       env: { ...process.env, CI: '1', DELEGATOR_HOME: fs.mkdtempSync(path.join(os.tmpdir(), 'dlg-codex-home-')) },
     });
     assert.equal(r.status, 0, r.stderr);
-    assert.equal(fs.readFileSync(path.join(project, '.codex', 'CODEX-SKILL.md'), 'utf8'), '# codex pack\n');
+    assert.equal(fs.readFileSync(path.join(project, '.codex', 'skills', 'delegator', 'SKILL.md'), 'utf8'), '# codex pack\n');
     assert.equal(fs.existsSync(path.join(project, 'AGENTS.md')), false);
   } finally {
     if (hadFile) fs.writeFileSync(adapterFile, previous, 'utf8');

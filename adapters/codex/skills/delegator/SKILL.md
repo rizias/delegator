@@ -1,3 +1,8 @@
+---
+name: delegator
+description: Dispatch well-specified coding tasks to a separate-pool worker via the delegator CLI (dlg) instead of burning your own tokens. Use when the user says "delegator", "delegate this", "hand it to a worker", asks to save tokens on a mechanical or standard coding task, or a well-specified task needs no conversation context. Do not use for trivial one-off edits, tasks needing conversation context, or security-sensitive code.
+---
+
 # delegator — for a Codex orchestrator
 
 > **Host skill:** this teaches *you, the orchestrator*, when and how to delegate via `dlg`. It is a

@@ -33,7 +33,7 @@ Two levels of integration, both optional:
 | Target | Command | Where it goes |
 |---|---|---|
 | Claude Code | `dlg skill install claude-code` | `~/.claude/skills/delegator/` (`--project` → `.claude/skills/`) |
-| Codex | `dlg skill install codex` | `~/.codex/CODEX-SKILL.md` (`--project` → `.codex/CODEX-SKILL.md`) |
+| Codex | `dlg skill install codex` | `~/.codex/skills/delegator/` (`--project` → `.codex/skills/delegator/`) |
 | **Any AGENTS.md-reading agent** (OpenCode, Pi, Hermes, Codex, …) | `dlg skill install agents-md` | repo `AGENTS.md` (managed block, re-runnable) |
 | **Literally anything else** | `dlg skill show` | prints the block — paste it into that agent's instruction file (GEMINI.md, rules, system prompt, …) |
 
