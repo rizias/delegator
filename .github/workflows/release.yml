@@ -1,0 +1,44 @@
+name: Release
+
+# One-button release. Actions tab → "Release" → Run workflow → pick patch / minor / major.
+# It runs tests, bumps the version, publishes to npm, and pushes the version commit + tag.
+#
+# npm auth uses OIDC Trusted Publishing (no NPM_TOKEN secret). One-time setup on npmjs.com:
+#   package → Settings → Trusted Publisher → GitHub Actions →
+#     owner: rizias   repo: delegator   workflow: release.yml
+# Alternative (token instead of OIDC): drop `id-token: write`, add a repo secret NPM_TOKEN,
+# and set `env: { NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }} }` on the `npm publish` step.
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Semver bump
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+
+permissions:
+  contents: write   # push the version commit + tag back to main
+  id-token: write   # OIDC Trusted Publishing to npm
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+          cache: npm
+      - run: npm ci
+      - run: npm test                     # fail before bumping if anything is red
+      - run: npm install -g npm@latest     # npm >= 11.5, required for OIDC trusted publishing
+      - name: Commit identity
+        run: |
+          git config user.name "rizias"
+          git config user.email "42223893+rizias@users.noreply.github.com"
+      - run: npm version ${{ inputs.bump }}   # bumps package.json + lock, commits, tags vX.Y.Z
+      - run: npm publish                       # OIDC; prepublishOnly reruns the tests
+      - run: git push --follow-tags
