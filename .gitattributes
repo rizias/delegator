@@ -1,0 +1,6 @@
+# Line endings: store and check out all text as LF, regardless of the editor's
+# OS. Without this, Windows editors commit CRLF and diffs/tests churn on it.
+* text=auto eol=lf
+
+# Binary assets are never line-ending converted.
+*.png binary
