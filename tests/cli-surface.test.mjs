@@ -147,3 +147,68 @@ test('read commands accept --json and emit parseable JSON', () => {
     assert.doesNotThrow(() => JSON.parse(r.stdout), `${cmd} did not emit JSON:\n${r.stdout}`);
   }
 });
+
+test('skill install --help lists agent-skills and no longer mentions agents-md', () => {
+  const r = runCli(['skill', 'install', '--help']);
+  assert.equal(r.status, 0);
+  assert.match(r.stdout, /agent-skills/);
+  assert.doesNotMatch(r.stdout, /agents-md/);
+});
+
+// The shipped generic skill must be a valid, host-NEUTRAL Agent Skill: Pi and any Agent-Skills
+// reader surface it from name+description, so those carry the triggers, and the body must not leak
+// Claude/Codex-specific phrasing. CRLF normalized so the guard holds on Windows checkouts.
+test('shipped generic adapter is a valid, host-neutral Agent Skill (SKILL.md)', () => {
+  const text = fs.readFileSync(path.join(root, 'adapters', 'generic', 'skills', 'delegator', 'SKILL.md'), 'utf8').replace(/\r\n/g, '\n');
+  assert.match(text, /^---\n/);
+  assert.match(text, /^name: delegator$/m);
+  assert.match(text, /^description: .+/m);
+  assert.match(text, /\n---\n/);
+  for (const trig of ['delegator', 'delegate', 'worker', 'save tokens']) {
+    assert.match(text, new RegExp(trig, 'i'), `missing trigger word "${trig}"`);
+  }
+  assert.match(text, /never read[^\n]*secrets\.yaml/i);
+  for (const cmd of ['dlg providers', 'dlg plan', 'dlg run', 'dlg result', 'dlg apply']) {
+    assert.ok(text.includes(cmd), `body missing command "${cmd}"`);
+  }
+  for (const leak of [/for a Codex orchestrator/, /Under a (Claude|Codex) orchestrator/, /model_reasoning_effort/, /Invoke this skill with \/delegator/]) {
+    assert.doesNotMatch(text, leak, `host-specific phrasing leaked: ${leak}`);
+  }
+});
+
+// Both the canonical host and the `agents-skills` alias must install the same SKILL.md into
+// .agents/skills/delegator/ and never write an AGENTS.md (file-based like the codex test, because
+// `skill install --json` is not wired to emit JSON for any host today).
+test('agent-skills skill install writes .agents/skills/delegator/SKILL.md (project); agents-skills alias works', () => {
+  for (const host of ['agent-skills', 'agents-skills']) {
+    const project = fs.mkdtempSync(path.join(os.tmpdir(), 'dlg-agentskills-project-'));
+    const r = spawnSync(process.execPath, [path.join(root, 'dist', 'cli.js'), 'skill', 'install', host, '--project'], {
+      cwd: project,
+      encoding: 'utf8',
+      env: { ...process.env, CI: '1', DELEGATOR_HOME: fs.mkdtempSync(path.join(os.tmpdir(), 'dlg-agentskills-home-')) },
+    });
+    assert.equal(r.status, 0, r.stderr);
+    const dest = path.join(project, '.agents', 'skills', 'delegator', 'SKILL.md');
+    const installed = fs.readFileSync(dest, 'utf8').replace(/\r\n/g, '\n');
+    assert.match(installed, /^---\n/);
+    assert.match(installed, /^name: delegator$/m);
+    // a SKILL.md install must never touch AGENTS.md
+    assert.equal(fs.existsSync(path.join(project, 'AGENTS.md')), false);
+  }
+});
+
+test('removed agents-md host is rejected and lists the current hosts', () => {
+  const r = runCli(['skill', 'install', 'agents-md']);
+  assert.notEqual(r.status, 0);
+  assert.match(r.stderr, /unknown host "agents-md"/);
+  assert.match(r.stderr, /claude-code, codex, agent-skills/);
+});
+
+test('skill show prints the generic SKILL.md, not an AGENTS.md block', () => {
+  const r = runCli(['skill', 'show']);
+  assert.equal(r.status, 0);
+  const text = r.stdout.replace(/\r\n/g, '\n');
+  assert.match(text, /^---\n/);
+  assert.match(text, /^name: delegator$/m);
+  assert.doesNotMatch(text, /delegator:begin/);
+});

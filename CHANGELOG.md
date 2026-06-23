@@ -4,6 +4,19 @@ All notable changes to Delegator are documented here. This project adheres to
 [Semantic Versioning](https://semver.org), and the format is based on
 [Keep a Changelog](https://keepachangelog.com).
 
+## [Unreleased]
+
+### Added
+- **Universal Agent Skill install:** `dlg skill install agent-skills` (alias `agents-skills`) writes a
+  host-neutral `delegator/SKILL.md` into `~/.agents/skills/delegator/` (or `.agents/skills/delegator/`
+  with `--project`) — discovered by Pi and any Agent-Skills-compatible harness, with no Claude/Codex
+  flavor. `dlg skill show` now prints this generic skill.
+
+### Removed
+- **`dlg skill install agents-md`** and its managed `AGENTS.md` block: a pasted AGENTS.md section is
+  not a discoverable Agent Skill. Use `dlg skill install agent-skills` (or `dlg skill show` to paste
+  into any instruction file) instead.
+
 ## [0.3.22] — 2026-06-22
 
 ### Fixed

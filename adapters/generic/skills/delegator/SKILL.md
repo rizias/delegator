@@ -6,9 +6,8 @@ description: Dispatch well-specified coding tasks to a separate-pool worker via 
 # Delegator — dispatch work to a separate-pool worker
 
 `dlg` (alias `delegator`) is a brainless dispatcher: **you** decide and judge; it spawns a bounded
-worker in an isolated git worktree and returns a result envelope. Invoke this skill with
-`/delegator`, or call `dlg` directly. Requires: the target project is a git repo with at least one
-commit.
+worker in an isolated git worktree and returns a result envelope. Call `dlg` directly (this skill
+teaches you when and how). Requires: the target project is a git repo with at least one commit.
 
 > This **host** skill teaches *you, the orchestrator*, when and how to delegate. It is a different
 > concern from **worker equipment** (`equip.skills` in config / a worker's `--skill` toggle), which
@@ -49,9 +48,9 @@ never have to learn config formats:
 6. **Verify before declaring done:** `dlg providers` — every provider you wrote resolves (status
    `available`, or `unconfigured` only until the user adds its key); spot-check `dlg plan -w <handle>`.
    Resolve any "matches multiple runtimes" error by pinning `defaultRuntime`.
-7. **Install the host skill(s)** for every orchestrator they run: `dlg skill install claude-code`
-   (and `dlg skill install codex`, or `dlg skill install agent-skills` for Pi / any other agent) so
-   each session knows how to delegate.
+7. **Install the host skill** for every orchestrator they run: `dlg skill install agent-skills`
+   (universal — Pi and any Agent-Skills-compatible harness), plus `dlg skill install claude-code` or
+   `dlg skill install codex` for those specific orchestrators, so each session knows how to delegate.
 
 To reconfigure from scratch: `rm -rf ~/.delegator && dlg init`, then redo discovery (this also
 removes `secrets.yaml`, so the user re-adds their keys).
@@ -89,11 +88,12 @@ runtime** — reach it via `claude` (its anthropic endpoint) or `api` (chat/comp
 ## Model economy
 
 You are the orchestrator: you plan, write briefs, and verify. Delegate the **volume** to a worker in
-a **separate usage pool** from your own — a worker on the same subscription as you gives zero relief.
-Under a Claude orchestrator that means codex / opencode / GLM — **not** `claude/*` (same OAuth pool).
-A worker's pool is the **account it bills** (its key or login), not the runtime it uses: a z.ai/GLM
-worker runs on the `claude` runtime yet draws on your z.ai key — a separate pool that *does* relieve
-you. Only native `anthropic/*` workers share your Claude login.
+a **separate usage pool** from your own — a worker on the same subscription or account gives no token
+relief. Whatever orchestrator you are, pick a worker on a *different* pool: a Claude orchestrator uses
+codex / GLM / opencode (not another `claude/*`); a Codex orchestrator uses Claude / GLM (not
+`codex/*`). A worker's pool is the **account it bills** (its key or login), not the runtime it uses:
+a z.ai/GLM worker runs on the `claude` runtime yet draws on your z.ai key — a separate pool that
+*does* relieve you. Only a worker on your own subscription/login shares your pool.
 Keep ≤2–3 parallel runs; sequential work = one worker; state the batch cost before fanning out;
 workers never spawn workers. Never read `secrets.yaml`; never copy anyone's auth tokens.
 
@@ -164,9 +164,9 @@ Present it as one ready-to-paste fenced block. Filing is always the user's choic
 
 ## Keys & safety
 
-API keys live in `~/.delegator/secrets.yaml` — **never** read it, and never copy anyone's auth
-tokens anywhere. Adding a key is the user's action: `echo <KEY> | dlg key set <provider>`. The
-registry `~/.delegator/providers.yaml` is safe to read and edit; `keyEnv` there is a name, not a key.
+**Never read `~/.delegator/secrets.yaml`**, and never copy anyone's auth tokens anywhere. API keys
+live there; adding a key is the user's action: `echo <KEY> | dlg key set <provider>`. The registry
+`~/.delegator/providers.yaml` is safe to read and edit; `keyEnv` there is a name, not a key.
 A worker's key resolves as `secrets.yaml[provider]` first, then the `keyEnv` env var — so make `keyEnv`
 the provider's OWN variable, never a generic one already in the shell (a stray `OPENAI_API_KEY` would
 otherwise be used as a wrong-key fallback).

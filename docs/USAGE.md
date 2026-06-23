@@ -34,10 +34,10 @@ Two levels of integration, both optional:
 |---|---|---|
 | Claude Code | `dlg skill install claude-code` | `~/.claude/skills/delegator/` (`--project` → `.claude/skills/delegator/`) |
 | Codex | `dlg skill install codex` | `~/.codex/skills/delegator/` (`--project` → `.codex/skills/delegator/`) |
-| **Any AGENTS.md-reading agent** (OpenCode, Pi, Hermes, Codex, …) | `dlg skill install agents-md` | repo `AGENTS.md` (managed block, re-runnable) |
-| **Literally anything else** | `dlg skill show` | prints the block — paste it into that agent's instruction file (GEMINI.md, rules, system prompt, …) |
+| **Any Agent-Skills agent** (Pi, …) | `dlg skill install agent-skills` | `~/.agents/skills/delegator/` (`--project` → `.agents/skills/delegator/`) |
+| **Literally anything else** | `dlg skill show` | prints the skill — paste it into that agent's instruction file (GEMINI.md, rules, system prompt, …) |
 
-So "I have 50 different agents" needs no 50 integrations: most modern agents read `AGENTS.md` (one `dlg skill install agents-md` per repo covers them all at once), and the escape hatch `dlg skill show` covers every other format by copy-paste. The adapter is just text. The guarantee that delegator *works* comes from the CLI; the adapter only improves *when the brain reaches for it*.
+So "I have 50 different agents" needs no 50 integrations: one `dlg skill install agent-skills` writes a host-neutral skill into `~/.agents/skills/` that every Agent-Skills-compatible harness (Pi, …) discovers, and the escape hatch `dlg skill show` covers every other format by copy-paste. The adapter is just text. The guarantee that delegator *works* comes from the CLI; the adapter only improves *when the brain reaches for it*.
 
 ## Several agents at once
 

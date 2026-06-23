@@ -24,10 +24,10 @@ Claude Code, Codex, OpenCode, GLM, MiMo, DeepSeek, LM Studio, Ollama, vLLM, and 
 ```shell
 npm install -g @rizias/delegator   # the dlg CLI
 dlg init                           # scaffold ~/.delegator/
-dlg skill install claude-code      # or: codex | agents-md (one AGENTS.md — OpenCode, Gemini, any reader)
+dlg skill install claude-code      # or: codex | agent-skills (universal — Pi & any Agent-Skills agent)
 ```
 
-`dlg skill show` prints the block for any other instruction format. Or tell your agent *"set up
+`dlg skill show` prints the skill for any other instruction format. Or tell your agent *"set up
 Delegator for this project"* — it runs these and drafts `providers.yaml`.
 
 Each worker logs in itself (`claude` → `/login`, `codex login`, `opencode auth login`, …); Delegator

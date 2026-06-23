@@ -164,8 +164,8 @@ defineCommand('init')
       console.log('next steps:');
       console.log('  1. dlg doctor                        # discovery data for agent-driven provider provisioning');
       console.log('  2. dlg providers                     # see which workers became available');
-      console.log('  3. dlg skill install codex           # teach Codex when/how to delegate');
-      console.log('     dlg skill install claude-code');
+      console.log('  3. dlg skill install agent-skills    # universal skill (Pi & any Agent-Skills agent)');
+      console.log('     dlg skill install claude-code     # or: codex — for those specific orchestrators');
     }, opts.json);
   });
 
@@ -683,28 +683,13 @@ function adapterPath(...segments: string[]): string {
 const skillCmd = defineCommand('skill')
   .description('install HOST instruction packs (teach an orchestrator when/how to delegate) — NOT the per-worker equip.skills CLI toggles');
 
-// Generic AGENTS.md is an explicit host instruction pack, separate from worker
-// runtime equipment such as per-worker equip.skills CLI toggles.
-function writeAgentsMdBlock(dest: string): void {
-  const section = fs.readFileSync(adapterPath('generic', 'AGENTS-section.md'), 'utf8');
-  fs.mkdirSync(path.dirname(dest), { recursive: true });
-  let current = '';
-  try { current = fs.readFileSync(dest, 'utf8'); } catch { /* new file */ }
-  if (current.includes('<!-- delegator:begin')) {
-    current = current.replace(/<!-- delegator:begin[\s\S]*?<!-- delegator:end -->/m, section.trim());
-  } else {
-    current = current.trimEnd() + (current.trim() ? '\n\n' : '') + section.trim() + '\n';
-  }
-  fs.writeFileSync(dest, current, 'utf8');
-}
-
 skillCmd
   .command('show')
-  .description('print the generic AGENTS.md instruction block for the agents-md host')
+  .description('print the generic delegator SKILL.md (paste into any agent that has no installer)')
   .option('--json', 'output machine-readable JSON')
   .action((opts: { json?: boolean }) => {
     try {
-      const text = fs.readFileSync(adapterPath('generic', 'AGENTS-section.md'), 'utf8');
+      const text = fs.readFileSync(adapterPath('generic', 'skills', 'delegator', 'SKILL.md'), 'utf8');
       emit({ text }, () => {
         process.stdout.write(text);
       }, opts.json);
@@ -713,7 +698,7 @@ skillCmd
 
 skillCmd
   .command('install <host>')
-  .description('host: claude-code | codex | agents-md. --project = into the current repo')
+  .description('host: claude-code | codex | agent-skills. --project = into the current repo')
   .option('--project', 'install for the current project only')
   .option('--json', 'output machine-readable JSON')
   .action((host: string, opts: { project?: boolean; json?: boolean }) => {
@@ -751,19 +736,25 @@ skillCmd
         }, opts.json);
         return;
       }
-      if (host === 'agents-md') {
-        // The cross-agent standard: OpenCode, Pi, Hermes and most modern agents
-        // read AGENTS.md from the project root.
-        const dest = path.join(process.cwd(), 'AGENTS.md');
-        writeAgentsMdBlock(dest);
-        emit({ host, installed: true, path: dest, project: true }, () => {
-          console.log(`installed instructions: ${dest}`);
-          console.log('any agent that reads AGENTS.md in this repo now knows how to use delegator.');
+      if (host === 'agent-skills' || host === 'agents-skills') {
+        // The cross-agent Agent Skills convention: Pi and any Agent-Skills-compatible
+        // harness discover skills/<name>/SKILL.md under ~/.agents/skills (global) or
+        // .agents/skills (project). One host-neutral skill covers them all.
+        const src = adapterPath('generic', 'skills', 'delegator', 'SKILL.md');
+        const destDir = opts.project
+          ? path.join(process.cwd(), '.agents', 'skills', 'delegator')
+          : path.join(os.homedir(), '.agents', 'skills', 'delegator');
+        fs.mkdirSync(destDir, { recursive: true });
+        const dest = path.join(destDir, 'SKILL.md');
+        fs.copyFileSync(src, dest);
+        emit({ host: 'agent-skills', installed: true, path: dest, project: Boolean(opts.project) }, () => {
+          console.log(`installed skill: ${dest}`);
+          console.log('any Agent-Skills-compatible agent (Pi, …) now discovers the delegator skill.');
         }, opts.json);
         return;
       }
-      console.error(`unknown host "${host}". Supported hosts: claude-code, codex, agents-md.`);
-      console.error('For any other agent: dlg skill show   # then paste the block into its instruction file');
+      console.error(`unknown host "${host}". Supported hosts: claude-code, codex, agent-skills.`);
+      console.error('For any other agent: dlg skill show   # then paste the skill into its instruction file');
       process.exit(2);
     } catch (e) { fail(e); }
   });

@@ -140,7 +140,7 @@ Everything above you can run by hand in a terminal. To let a host **agent** (Cla
 call `dlg`, with nothing added to your project:
 
 ```bash
-dlg skill install claude-code      # or: codex | agents-md
+dlg skill install claude-code      # or: codex | agent-skills
 ```
 
 **Without the pack** delegator still works — but the agent doesn't know it exists, so you drive `dlg`
@@ -168,9 +168,9 @@ npm uninstall -g @rizias/delegator
 **Remove installed host packs** (only if you ran `dlg skill install`):
 
 ```bash
-rm -rf ~/.claude/skills/delegator      # Claude Code  (project install: ./.claude/skills/delegator)
-rm -rf ~/.codex/skills/delegator       # Codex        (project install: ./.codex/skills/delegator)
-# AGENTS.md: delete the block between the  delegator:begin  and  delegator:end  markers
+rm -rf ~/.claude/skills/delegator      # Claude Code   (project install: ./.claude/skills/delegator)
+rm -rf ~/.codex/skills/delegator       # Codex         (project install: ./.codex/skills/delegator)
+rm -rf ~/.agents/skills/delegator      # Agent Skills  (project install: ./.agents/skills/delegator)
 ```
 
 ## Next
