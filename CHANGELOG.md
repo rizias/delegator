@@ -9,13 +9,37 @@ All notable changes to Delegator are documented here. This project adheres to
 ### Added
 - **Universal Agent Skill install:** `dlg skill install agent-skills` (alias `agents-skills`) writes a
   host-neutral `delegator/SKILL.md` into `~/.agents/skills/delegator/` (or `.agents/skills/delegator/`
-  with `--project`) — discovered by Pi and any Agent-Skills-compatible harness, with no Claude/Codex
+  with `--project`) — discovered by any Agent Skills-compatible agent, with no Claude/Codex
   flavor. `dlg skill show` now prints this generic skill.
+- **Skill versioning:** every installed host skill carries a `metadata.delegator-skill-version`
+  timestamp; `dlg skill update` refreshes installed skills (all hosts, global + project) to the
+  version this dlg ships, and `--check` reports stale ones without writing.
+- **Per-model concurrency cap:** a model's `limits.concurrent` is now actually enforced — it caps
+  concurrent runs of that one model, nested under the provider's `maxConcurrent` (acquired
+  provider-first; reads the model's config so it works for both bare `provider/model` handles and
+  named workers). Previously the field was accepted but silently ignored.
 
 ### Removed
 - **`dlg skill install agents-md`** and its managed `AGENTS.md` block: a pasted AGENTS.md section is
   not a discoverable Agent Skill. Use `dlg skill install agent-skills` (or `dlg skill show` to paste
   into any instruction file) instead.
+
+### Fixed
+- **z.ai / GLM reasoning effort:** the `claude` runtime catalog and the shipped z.ai example now
+  declare the full Claude-Code effort vocabulary — `low, medium, high, xhigh, max, ultracode` — matching
+  z.ai's published table, so `--effort max`/`ultracode` are accepted instead of rejected. z.ai folds them
+  (`low`/`medium`/`high` → GLM `high`; `xhigh`/`max`/`ultracode` → GLM `max`); the example defaults to
+  `xhigh` (= GLM `max`) so a bare run gets GLM's deepest mode. The config docs explain that delegator
+  validates a level against the model's catalog but the provider may *map* levels — so a "valid" level
+  can still be reinterpreted provider-side.
+- **Documentation accuracy:** corrected the Claude Code `--project` install path
+  (`.claude/skills/delegator/`); clarified that the worktree + patch flow applies to command-runtime
+  (agentic) runs while a direct `api` worker returns text with no worktree/patch; fixed the stale
+  "one run at a time" wording (a provider is unbounded by default — set `maxConcurrent: 1` for
+  one-at-a-time); added `secrets.yaml` to the `dlg init` file list; removed stale references to an
+  unimplemented MCP server.
+- **Release workflow:** `release.yml` now pushes the version commit + tag *before* publishing to npm,
+  and serializes concurrent release runs.
 
 ## [0.3.22] — 2026-06-22
 

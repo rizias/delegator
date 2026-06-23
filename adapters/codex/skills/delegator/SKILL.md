@@ -1,6 +1,8 @@
 ---
 name: delegator
 description: Dispatch well-specified coding tasks to a separate-pool worker via the delegator CLI (dlg) instead of burning your own tokens. Use when the user says "delegator", "delegate this", "hand it to a worker", asks to save tokens on a mechanical or standard coding task, or a well-specified task needs no conversation context. Do not use for trivial one-off edits, tasks needing conversation context, or security-sensitive code.
+metadata:
+  delegator-skill-version: "2026-06-23T06:51:25Z"
 ---
 
 # delegator — for a Codex orchestrator
@@ -40,8 +42,7 @@ Do it for the user — they should never learn config formats:
    `openai` stanza's shape and take `baseUrl` from the vendor's API docs (ask the user — don't guess).
 6. Verify: `dlg providers` (each provider resolves — `available`, or `unconfigured` until its key is
    added) and `dlg plan -w <handle>`; fix any "matches multiple runtimes" by pinning `defaultRuntime`.
-7. `dlg skill install codex` (and `… claude-code`, or `… agent-skills` for Pi / any other agent, for
-   the other orchestrators they use).
+7. `dlg skill install codex` (and `… claude-code` for the other orchestrators they use).
 
 To reconfigure from scratch: `rm -rf ~/.delegator && dlg init`, then redo discovery (this also
 removes `secrets.yaml`, so the user re-adds keys).

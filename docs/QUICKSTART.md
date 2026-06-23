@@ -140,7 +140,7 @@ Everything above you can run by hand in a terminal. To let a host **agent** (Cla
 call `dlg`, with nothing added to your project:
 
 ```bash
-dlg skill install claude-code      # or: codex | agent-skills
+dlg skill install claude-code      # or: codex | agent-skills (universal — any Agent Skills-compatible agent)
 ```
 
 **Without the pack** delegator still works — but the agent doesn't know it exists, so you drive `dlg`

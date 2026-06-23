@@ -164,7 +164,7 @@ defineCommand('init')
       console.log('next steps:');
       console.log('  1. dlg doctor                        # discovery data for agent-driven provider provisioning');
       console.log('  2. dlg providers                     # see which workers became available');
-      console.log('  3. dlg skill install agent-skills    # universal skill (Pi & any Agent-Skills agent)');
+      console.log('  3. dlg skill install agent-skills    # universal skill (any Agent Skills-compatible agent)');
       console.log('     dlg skill install claude-code     # or: codex — for those specific orchestrators');
     }, opts.json);
   });
@@ -680,8 +680,33 @@ function adapterPath(...segments: string[]): string {
   return path.join(here, '..', 'adapters', ...segments);
 }
 
-const skillCmd = defineCommand('skill')
+// NOTE: a plain program.command (not defineCommand) — the `skill` group has no action of its own, and
+// adding `--json` here would shadow the same flag on its show/install/update subcommands (a duplicate
+// parent option swallows the child's value), so per-subcommand `--json` would silently stop working.
+const skillCmd = program.command('skill')
   .description('install HOST instruction packs (teach an orchestrator when/how to delegate) — NOT the per-worker equip.skills CLI toggles');
+
+// Bundled host skills. ONE table drives install, update, and the supported-host list so the paths
+// can never drift. Each host's SKILL.md frontmatter carries metadata.delegator-skill-version (a UTC
+// timestamp), so `dlg skill update` can tell an installed copy from the version this dlg ships.
+type SkillHost = { host: string; aliases?: string[]; template: string[]; dir: string[]; installedMsg: string };
+const SKILL_HOSTS: SkillHost[] = [
+  { host: 'claude-code', template: ['claude-code', 'skills', 'delegator', 'SKILL.md'], dir: ['.claude', 'skills', 'delegator'],
+    installedMsg: 'new Claude Code sessions now know when and how to use delegator (/delegator).' },
+  { host: 'codex', template: ['codex', 'skills', 'delegator', 'SKILL.md'], dir: ['.codex', 'skills', 'delegator'],
+    installedMsg: 'new Codex sessions now know when and how to use delegator (/delegator).' },
+  { host: 'agent-skills', aliases: ['agents-skills'], template: ['generic', 'skills', 'delegator', 'SKILL.md'], dir: ['.agents', 'skills', 'delegator'],
+    installedMsg: 'any Agent Skills-compatible agent now discovers the delegator skill.' },
+];
+const findSkillHost = (host: string): SkillHost | undefined =>
+  SKILL_HOSTS.find((h) => h.host === host || (h.aliases?.includes(host) ?? false));
+const skillDest = (h: SkillHost, project: boolean): string =>
+  path.join(project ? process.cwd() : os.homedir(), ...h.dir, 'SKILL.md');
+// Read the version stamped in an installed skill's frontmatter (metadata.delegator-skill-version).
+function skillVersion(text: string): string {
+  const m = text.replace(/\r\n/g, '\n').match(/^\s*delegator-skill-version:\s*["']?([^"'\n]+?)["']?\s*$/m);
+  return m?.[1]?.trim() ?? 'unknown';
+}
 
 skillCmd
   .command('show')
@@ -703,59 +728,57 @@ skillCmd
   .option('--json', 'output machine-readable JSON')
   .action((host: string, opts: { project?: boolean; json?: boolean }) => {
     try {
-      if (host === 'claude-code') {
-        const src = adapterPath('claude-code', 'skills', 'delegator', 'SKILL.md');
-        const destDir = opts.project
-          ? path.join(process.cwd(), '.claude', 'skills', 'delegator')
-          : path.join(os.homedir(), '.claude', 'skills', 'delegator');
-        fs.mkdirSync(destDir, { recursive: true });
-        fs.copyFileSync(src, path.join(destDir, 'SKILL.md'));
-        // Clean up the briefly-shipped old name so two copies never coexist.
-        const legacy = path.join(path.dirname(destDir), 'delegate');
-        try { fs.rmSync(legacy, { recursive: true, force: true }); } catch { /* ignore */ }
-        const dest = path.join(destDir, 'SKILL.md');
-        emit({ host, installed: true, path: dest, project: Boolean(opts.project) }, () => {
-          console.log(`installed skill: ${path.join(destDir, 'SKILL.md')}`);
-          console.log('new Claude Code sessions now know when and how to use delegator (/delegator).');
-        }, opts.json);
+      const skillHost = findSkillHost(host);
+      if (!skillHost) {
+        console.error(`unknown host "${host}". Supported hosts: ${SKILL_HOSTS.map((h) => h.host).join(', ')}.`);
+        console.error('For any other agent: dlg skill show   # then paste the skill into its instruction file');
+        process.exit(2);
         return;
       }
-      if (host === 'codex') {
-        // Codex discovers skills exactly like Claude Code: a skills/<name>/SKILL.md tree
-        // (Codex scans ~/.codex/skills and .codex/skills).
-        const src = adapterPath('codex', 'skills', 'delegator', 'SKILL.md');
-        const destDir = opts.project
-          ? path.join(process.cwd(), '.codex', 'skills', 'delegator')
-          : path.join(os.homedir(), '.codex', 'skills', 'delegator');
-        fs.mkdirSync(destDir, { recursive: true });
-        const dest = path.join(destDir, 'SKILL.md');
-        fs.copyFileSync(src, dest);
-        emit({ host, installed: true, path: dest, project: Boolean(opts.project) }, () => {
-          console.log(`installed skill: ${dest}`);
-          console.log('new Codex sessions now know when and how to use delegator (/delegator).');
-        }, opts.json);
-        return;
+      const dest = skillDest(skillHost, Boolean(opts.project));
+      fs.mkdirSync(path.dirname(dest), { recursive: true });
+      fs.copyFileSync(adapterPath(...skillHost.template), dest);
+      emit({ host: skillHost.host, installed: true, path: dest, project: Boolean(opts.project) }, () => {
+        console.log(`installed skill: ${dest}`);
+        console.log(skillHost.installedMsg);
+      }, opts.json);
+    } catch (e) { fail(e); }
+  });
+
+skillCmd
+  .command('update')
+  .description('refresh installed delegator skills to the version this dlg ships (--check only reports)')
+  .option('--check', 'report stale installed skills without changing them')
+  .option('--json', 'output machine-readable JSON')
+  .action((opts: { check?: boolean; json?: boolean }) => {
+    try {
+      const scopes: Array<['global' | 'project', string]> = [['global', os.homedir()], ['project', process.cwd()]];
+      const skills: Array<{ host: string; scope: 'global' | 'project'; path: string; installed: string; shipped: string; action: string }> = [];
+      for (const skillHost of SKILL_HOSTS) {
+        const shippedText = fs.readFileSync(adapterPath(...skillHost.template), 'utf8');
+        const shippedVer = skillVersion(shippedText);
+        const shippedNorm = shippedText.replace(/\r\n/g, '\n');
+        for (const [scope, base] of scopes) {
+          const dest = path.join(base, ...skillHost.dir, 'SKILL.md');
+          if (!fs.existsSync(dest)) continue;
+          const curText = fs.readFileSync(dest, 'utf8');
+          const stale = curText.replace(/\r\n/g, '\n') !== shippedNorm;
+          let action = 'current';
+          if (stale) {
+            action = opts.check ? 'stale' : 'updated';
+            if (!opts.check) fs.copyFileSync(adapterPath(...skillHost.template), dest);
+          }
+          skills.push({ host: skillHost.host, scope, path: dest, installed: skillVersion(curText), shipped: shippedVer, action });
+        }
       }
-      if (host === 'agent-skills' || host === 'agents-skills') {
-        // The cross-agent Agent Skills convention: Pi and any Agent-Skills-compatible
-        // harness discover skills/<name>/SKILL.md under ~/.agents/skills (global) or
-        // .agents/skills (project). One host-neutral skill covers them all.
-        const src = adapterPath('generic', 'skills', 'delegator', 'SKILL.md');
-        const destDir = opts.project
-          ? path.join(process.cwd(), '.agents', 'skills', 'delegator')
-          : path.join(os.homedir(), '.agents', 'skills', 'delegator');
-        fs.mkdirSync(destDir, { recursive: true });
-        const dest = path.join(destDir, 'SKILL.md');
-        fs.copyFileSync(src, dest);
-        emit({ host: 'agent-skills', installed: true, path: dest, project: Boolean(opts.project) }, () => {
-          console.log(`installed skill: ${dest}`);
-          console.log('any Agent-Skills-compatible agent (Pi, …) now discovers the delegator skill.');
-        }, opts.json);
-        return;
-      }
-      console.error(`unknown host "${host}". Supported hosts: claude-code, codex, agent-skills.`);
-      console.error('For any other agent: dlg skill show   # then paste the skill into its instruction file');
-      process.exit(2);
+      emit({ ok: true, skills }, () => {
+        if (!skills.length) { console.log('no installed delegator skills found (install one with: dlg skill install <host>)'); return; }
+        for (const r of skills) {
+          if (r.action === 'current') console.log(`current  ${r.host} (${r.scope})  ${r.installed}`);
+          else if (r.action === 'stale') console.log(`stale    ${r.host} (${r.scope})  ${r.installed} -> ${r.shipped}   (run: dlg skill update)`);
+          else console.log(`updated  ${r.host} (${r.scope})  ${r.installed} -> ${r.shipped}`);
+        }
+      }, opts.json);
     } catch (e) { fail(e); }
   });
 

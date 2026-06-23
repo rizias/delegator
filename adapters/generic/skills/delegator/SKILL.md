@@ -1,6 +1,8 @@
 ---
 name: delegator
 description: Dispatch well-specified coding tasks to a separate-pool worker via the delegator CLI (dlg) instead of burning your own tokens. Use when the user says "delegator", "delegate this", "hand it to a worker", asks to save tokens on a mechanical or standard coding task, or a well-specified task needs no conversation context. Do not use for trivial one-off edits, tasks needing conversation context, or security-sensitive code.
+metadata:
+  delegator-skill-version: "2026-06-23T06:51:25Z"
 ---
 
 # Delegator — dispatch work to a separate-pool worker
@@ -49,7 +51,7 @@ never have to learn config formats:
    `available`, or `unconfigured` only until the user adds its key); spot-check `dlg plan -w <handle>`.
    Resolve any "matches multiple runtimes" error by pinning `defaultRuntime`.
 7. **Install the host skill** for every orchestrator they run: `dlg skill install agent-skills`
-   (universal — Pi and any Agent-Skills-compatible harness), plus `dlg skill install claude-code` or
+   (universal — any Agent Skills-compatible agent), plus `dlg skill install claude-code` or
    `dlg skill install codex` for those specific orchestrators, so each session knows how to delegate.
 
 To reconfigure from scratch: `rm -rf ~/.delegator && dlg init`, then redo discovery (this also

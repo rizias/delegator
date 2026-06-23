@@ -24,7 +24,7 @@ Claude Code, Codex, OpenCode, GLM, MiMo, DeepSeek, LM Studio, Ollama, vLLM, and 
 ```shell
 npm install -g @rizias/delegator   # the dlg CLI
 dlg init                           # scaffold ~/.delegator/
-dlg skill install claude-code      # or: codex | agent-skills (universal — Pi & any Agent-Skills agent)
+dlg skill install claude-code      # or: codex | agent-skills (universal — any Agent Skills-compatible agent)
 ```
 
 `dlg skill show` prints the skill for any other instruction format. Or tell your agent *"set up

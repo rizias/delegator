@@ -155,8 +155,8 @@ test('skill install --help lists agent-skills and no longer mentions agents-md',
   assert.doesNotMatch(r.stdout, /agents-md/);
 });
 
-// The shipped generic skill must be a valid, host-NEUTRAL Agent Skill: Pi and any Agent-Skills
-// reader surface it from name+description, so those carry the triggers, and the body must not leak
+// The shipped generic skill must be a valid, host-NEUTRAL Agent Skill: any Agent Skills-compatible
+// reader surfaces it from name+description, so those carry the triggers, and the body must not leak
 // Claude/Codex-specific phrasing. CRLF normalized so the guard holds on Windows checkouts.
 test('shipped generic adapter is a valid, host-neutral Agent Skill (SKILL.md)', () => {
   const text = fs.readFileSync(path.join(root, 'adapters', 'generic', 'skills', 'delegator', 'SKILL.md'), 'utf8').replace(/\r\n/g, '\n');
@@ -177,8 +177,7 @@ test('shipped generic adapter is a valid, host-neutral Agent Skill (SKILL.md)', 
 });
 
 // Both the canonical host and the `agents-skills` alias must install the same SKILL.md into
-// .agents/skills/delegator/ and never write an AGENTS.md (file-based like the codex test, because
-// `skill install --json` is not wired to emit JSON for any host today).
+// .agents/skills/delegator/ and never write an AGENTS.md (file-based, like the codex install test).
 test('agent-skills skill install writes .agents/skills/delegator/SKILL.md (project); agents-skills alias works', () => {
   for (const host of ['agent-skills', 'agents-skills']) {
     const project = fs.mkdtempSync(path.join(os.tmpdir(), 'dlg-agentskills-project-'));
@@ -211,4 +210,47 @@ test('skill show prints the generic SKILL.md, not an AGENTS.md block', () => {
   assert.match(text, /^---\n/);
   assert.match(text, /^name: delegator$/m);
   assert.doesNotMatch(text, /delegator:begin/);
+});
+
+// each shipped skill carries metadata.delegator-skill-version (a UTC timestamp) in frontmatter; `dlg
+// skill update` refreshes a stale installed skill to the shipped template, --check only reports.
+// HOME/USERPROFILE are sandboxed so the global scan can't pick up real installs on the dev machine.
+test('shipped skills carry one global ISO-8601 timestamp version', () => {
+  const versions = [['claude-code'], ['codex'], ['generic']].map((seg) => {
+    const text = fs.readFileSync(path.join(root, 'adapters', ...seg, 'skills', 'delegator', 'SKILL.md'), 'utf8').replace(/\r\n/g, '\n');
+    const m = text.match(/^\s*delegator-skill-version:\s*["']?(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)["']?\s*$/m);
+    assert.ok(m, `${seg.join('/')} missing an ISO-8601 UTC timestamp version`);
+    return m[1];
+  });
+  // one global stamp: every shipped skill must carry the SAME timestamp.
+  assert.equal(new Set(versions).size, 1, `skill versions drifted: ${versions.join(', ')}`);
+});
+
+test('skill update refreshes a stale installed skill; --check only reports', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'dlg-update-home-'));
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), 'dlg-update-proj-'));
+  const env = { ...process.env, CI: '1', HOME: home, USERPROFILE: home, DELEGATOR_HOME: fs.mkdtempSync(path.join(os.tmpdir(), 'dlg-update-dlg-')) };
+  const run = (args) => spawnSync(process.execPath, [path.join(root, 'dist', 'cli.js'), ...args], { cwd: project, encoding: 'utf8', env });
+  const entryOf = (out) => JSON.parse(out).skills.find((s) => s.host === 'agent-skills' && s.scope === 'project');
+
+  assert.equal(run(['skill', 'install', 'agent-skills', '--project']).status, 0);
+  const dest = path.join(project, '.agents', 'skills', 'delegator', 'SKILL.md');
+  assert.ok(fs.existsSync(dest));
+
+  // freshly installed → current
+  let r = run(['skill', 'update', '--check', '--json']);
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(entryOf(r.stdout).action, 'current');
+
+  // user drift → stale, and --check must NOT rewrite the file
+  fs.writeFileSync(dest, fs.readFileSync(dest, 'utf8') + '\nlocal drift\n', 'utf8');
+  r = run(['skill', 'update', '--check', '--json']);
+  assert.equal(entryOf(r.stdout).action, 'stale');
+  assert.match(fs.readFileSync(dest, 'utf8'), /local drift/);
+
+  // update (no --check) → refreshed back to the shipped template
+  r = run(['skill', 'update', '--json']);
+  assert.equal(entryOf(r.stdout).action, 'updated');
+  const shipped = fs.readFileSync(path.join(root, 'adapters', 'generic', 'skills', 'delegator', 'SKILL.md'), 'utf8').replace(/\r\n/g, '\n');
+  assert.equal(fs.readFileSync(dest, 'utf8').replace(/\r\n/g, '\n'), shipped);
 });
