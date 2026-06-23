@@ -19,7 +19,11 @@ runtimes:
       - ANTHROPIC
       - CLAUDE
     effortLevels:
-      levels: [low, medium, high, xhigh]
+      # The full Claude-Code effort vocabulary, per z.ai's Claude-Code guide
+      # (https://docs.z.ai/devpack/tool/claude). z.ai/GLM folds it onto its two real modes:
+      # low/medium/high -> GLM "high"; xhigh/max/ultracode -> GLM "max". The level is passed verbatim
+      # as `--effort` to the claude CLI, so an unsupported name fails loudly at the worker, not here.
+      levels: [low, medium, high, xhigh, max, ultracode]
       default: medium
     args:
       - -p

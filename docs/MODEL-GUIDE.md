@@ -143,7 +143,7 @@ config; calibrate with `gain`.
   they authenticate through your installed `claude` CLI subscription. Subject to the pool rule above.
 
 Reasoning effort is set per worker by its runtime's own level names (e.g. claude
-`low|medium|high|xhigh`, codex `minimal|low|medium|high|xhigh`) via `reasoningEffort:` on the model, or
+`low|medium|high|xhigh|max|ultracode`, codex `minimal|low|medium|high|xhigh`) via `reasoningEffort:` on the model, or
 overridden per run with `--effort`. See [CONFIG.md](CONFIG.md) for the per-runtime effort catalog.
 
 ## 5. Calibration loop

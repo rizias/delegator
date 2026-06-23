@@ -204,7 +204,7 @@ test('a bare handle to a model with no per-model reasoning data inherits runtime
     model: 'glm-5.2',
     runtime: 'claude',
     reasoningEffort: 'medium',
-    reasoningEffortLevels: ['low', 'medium', 'high', 'xhigh'],
+    reasoningEffortLevels: ['low', 'medium', 'high', 'xhigh', 'max', 'ultracode'],
   });
 });
 
