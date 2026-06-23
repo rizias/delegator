@@ -82,7 +82,7 @@ providers:
     models:
       # GLM has 2 real reasoning modes ("high" and "max"). z.ai accepts all six Claude-Code effort
       # levels and folds them (https://docs.z.ai/devpack/tool/claude):
-      #     low / medium / high (default)  ->  GLM "high"
+      #     low / medium / high            ->  GLM "high"
       #     xhigh / max / ultracode        ->  GLM "max"
       # EVERY level just works — z.ai does the mapping, nothing is rejected. We set the DEFAULT to xhigh
       # so a bare run gets GLM's deepest "max" mode (z.ai recommends max for coding); pass

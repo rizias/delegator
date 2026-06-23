@@ -37,7 +37,7 @@ All notable changes to Delegator are documented here. This project adheres to
   `xhigh` (= GLM `max`) so a bare run gets GLM's deepest mode. The config docs explain that delegator
   validates a level against the model's catalog but the provider may *map* levels — so a "valid" level
   can still be reinterpreted provider-side.
-- **Documentation accuracy:** corrected the Claude Code `--project` install path
+- **Documentation accuracy:** corrected the Claude Code install path
   (`.claude/skills/delegator/`); clarified that the worktree + patch flow applies to command-runtime
   (agentic) runs while a direct `api` worker returns text with no worktree/patch; fixed the stale
   "one run at a time" wording (a provider is unbounded by default — set `maxConcurrent: 1` for
