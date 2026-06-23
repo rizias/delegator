@@ -168,9 +168,9 @@ npm uninstall -g @rizias/delegator
 **Remove installed host skills** (only if you ran `dlg skill install`):
 
 ```bash
-rm -rf ~/.claude/skills/delegator      # Claude Code   (project install: ./.claude/skills/delegator)
-rm -rf ~/.codex/skills/delegator       # Codex         (project install: ./.codex/skills/delegator)
-rm -rf ~/.agents/skills/delegator      # Agent Skills  (project install: ./.agents/skills/delegator)
+rm -rf ~/.claude/skills/delegator      # Claude Code
+rm -rf ~/.codex/skills/delegator       # Codex
+rm -rf ~/.agents/skills/delegator      # Agent Skills
 ```
 
 ## Next

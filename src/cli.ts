@@ -59,6 +59,21 @@ function compareSemver(a: string, b: string): number {
   return 0;
 }
 
+// update-check.json holds BOTH the npm-version check and the skill check. These helpers merge a single
+// field instead of overwriting the file, so within one process the two checks don't clobber each other.
+// The cache is deliberately best-effort: the npm check runs in a detached child, so two writers (or two
+// concurrent `dlg` runs) can still race on the read-merge-write. Accepted — a dropped field just triggers
+// a benign re-check next run; no skill is left stale and no file is corrupted. Not worth a cross-proc lock.
+function readUpdateCheck(): { checkedAt?: number; latest?: string; skillCheckedAt?: number; skillCheckedVersion?: string } {
+  try { return JSON.parse(fs.readFileSync(updateCheckPath(), 'utf8')); } catch { return {}; }
+}
+function writeUpdateCheck(patch: Record<string, unknown>): void {
+  try {
+    fs.mkdirSync(path.dirname(updateCheckPath()), { recursive: true });
+    fs.writeFileSync(updateCheckPath(), JSON.stringify({ ...readUpdateCheck(), ...patch }), 'utf8');
+  } catch { /* cache is best-effort */ }
+}
+
 function spawnUpdateCheck(cachePath: string): void {
   const script = `
 const fs = require('node:fs');
@@ -76,7 +91,9 @@ try {
   const latest = String(r.stdout || '').trim().split(/\\s+/).pop();
   if (r.status === 0 && /^\\d+\\.\\d+\\.\\d+/.test(latest || '')) {
     fs.mkdirSync(path.dirname(cachePath), { recursive: true });
-    fs.writeFileSync(cachePath, JSON.stringify({ checkedAt: Date.now(), latest }), 'utf8');
+    let cur = {};
+    try { cur = JSON.parse(fs.readFileSync(cachePath, 'utf8')); } catch {}
+    fs.writeFileSync(cachePath, JSON.stringify({ ...cur, checkedAt: Date.now(), latest }), 'utf8');
   }
 } catch {}
 `;
@@ -92,19 +109,43 @@ function maybeCheckForUpdate(): void {
   try {
     if (process.env.CI || process.argv.includes('--json') || process.argv.includes('--version') || process.argv.includes('-v')) return;
     const cachePath = updateCheckPath();
-    let latest: string | undefined;
-    let checkedAt = 0;
-    try {
-      const cached = JSON.parse(fs.readFileSync(cachePath, 'utf8')) as { checkedAt?: number; latest?: string };
-      latest = typeof cached.latest === 'string' ? cached.latest : undefined;
-      checkedAt = typeof cached.checkedAt === 'number' ? cached.checkedAt : 0;
-    } catch { /* no cache yet */ }
+    const cached = readUpdateCheck();
+    const latest = typeof cached.latest === 'string' ? cached.latest : undefined;
+    const checkedAt = typeof cached.checkedAt === 'number' ? cached.checkedAt : 0;
     const stale = Date.now() - checkedAt > UPDATE_CACHE_TTL_MS;
     if (stale) spawnUpdateCheck(cachePath);
     if (!stale && latest && compareSemver(latest, VERSION) > 0) {
       process.stderr.write(`\x1b[2mdelegator ${latest} available (you have ${VERSION}) — run: dlg update\x1b[0m\n`);
     }
   } catch { /* update checks must never affect startup */ }
+}
+
+// On startup, silently bring installed GLOBAL skills up to the version this dlg ships. No flag, no
+// command — updating the dlg binary is what updates the skills. Cached (TTL + this dlg's version) in
+// the same update-check.json so it isn't recomputed every command. Skipped under CI (never mutate a
+// CI home) and for --version.
+function maybeAutoUpdateSkills(): void {
+  try {
+    if (process.env.CI || process.argv.includes('--version') || process.argv.includes('-v')) return;
+    const cached = readUpdateCheck();
+    const fresh = cached.skillCheckedVersion === VERSION
+      && typeof cached.skillCheckedAt === 'number'
+      && Date.now() - cached.skillCheckedAt <= UPDATE_CACHE_TTL_MS;
+    if (fresh) return;
+    let refreshed = 0;
+    let failed = false;
+    for (const s of scanInstalledSkills()) {
+      if (!s.stale) continue;
+      // Isolate a per-host copy failure (e.g. an unreadable/locked dest) so one bad path can't stop the
+      // others; if anything failed, don't mark the check fresh, so the next run retries it.
+      try { fs.copyFileSync(adapterPath(...s.template), s.path); refreshed++; }
+      catch { failed = true; }
+    }
+    if (!failed) writeUpdateCheck({ skillCheckedAt: Date.now(), skillCheckedVersion: VERSION });
+    if (refreshed && !process.argv.includes('--json')) {
+      process.stderr.write(`\x1b[2mdelegator: refreshed ${refreshed} installed skill(s) to the current version\x1b[0m\n`);
+    }
+  } catch { /* skill auto-update must never affect startup */ }
 }
 
 function fail(e: unknown): never {
@@ -262,8 +303,6 @@ defineCommand('doctor')
     } catch (e) {
       configError = String(e instanceof Error ? e.message : e);
     }
-    let staleSkills: Array<{ host: string; scope: 'global' | 'project'; installed: string; shipped: string }> = [];
-    try { staleSkills = scanInstalledSkills().filter((s) => s.stale).map((s) => ({ host: s.host, scope: s.scope, installed: s.installed, shipped: s.shipped })); } catch { /* doctor is best-effort */ }
     emit({
       node: { version: node, ok: Number(node.split('.')[0]) >= 20 },
       binaries,
@@ -279,7 +318,6 @@ defineCommand('doctor')
         },
       } : {}),
       ...(configError ? { configError } : {}),
-      ...(staleSkills.length ? { staleSkills } : {}),
     }, () => {
       console.log(`node: ${node} ${Number(node.split('.')[0]) >= 20 ? 'ok' : 'TOO OLD (need >=20)'}`);
       for (const bin of ['git', 'claude', 'codex', 'opencode', 'pi']) {
@@ -297,10 +335,6 @@ defineCommand('doctor')
         for (const w of doctorLoad.infos.filter((i) => i.status !== 'available')) console.log(`  ${w.id}: ${w.status} — ${w.reason ?? ''}`);
       } else {
         console.log(`config not loadable: ${configError}`);
-      }
-      if (staleSkills.length) {
-        console.log(`skills: ${staleSkills.length} installed skill(s) STALE — run: dlg skill update`);
-        for (const s of staleSkills) console.log(`  ${s.host} (${s.scope}): ${s.installed} -> ${s.shipped}`);
       }
     }, opts.json);
   });
@@ -691,14 +725,14 @@ function adapterPath(...segments: string[]): string {
 }
 
 // NOTE: a plain program.command (not defineCommand) — the `skill` group has no action of its own, and
-// adding `--json` here would shadow the same flag on its show/install/update subcommands (a duplicate
-// parent option swallows the child's value), so per-subcommand `--json` would silently stop working.
+// adding `--json` here would shadow the same flag on its show/install subcommands (a duplicate parent
+// option swallows the child's value), so per-subcommand `--json` would silently stop working.
 const skillCmd = program.command('skill')
   .description('install a host skill (teach an orchestrator when/how to delegate) — NOT the per-worker equip.skills CLI toggles');
 
-// Bundled host skills. ONE table drives install, update, and the supported-host list so the paths
-// can never drift. Each host's SKILL.md frontmatter carries metadata.delegator-skill-version (a UTC
-// timestamp), so `dlg skill update` can tell an installed copy from the version this dlg ships.
+// Bundled host skills. ONE table drives install, the supported-host list, and the startup auto-refresh
+// so the paths can never drift. Each host's SKILL.md frontmatter carries metadata.delegator-skill-version
+// (a UTC timestamp), so the startup check can tell an installed copy from the version this dlg ships.
 type SkillHost = { host: string; aliases?: string[]; template: string[]; dir: string[]; installedMsg: string };
 const SKILL_HOSTS: SkillHost[] = [
   { host: 'claude-code', template: ['claude-code', 'skills', 'delegator', 'SKILL.md'], dir: ['.claude', 'skills', 'delegator'],
@@ -710,27 +744,32 @@ const SKILL_HOSTS: SkillHost[] = [
 ];
 const findSkillHost = (host: string): SkillHost | undefined =>
   SKILL_HOSTS.find((h) => h.host === host || (h.aliases?.includes(host) ?? false));
-const skillDest = (h: SkillHost, project: boolean): string =>
-  path.join(project ? process.cwd() : os.homedir(), ...h.dir, 'SKILL.md');
+const skillDest = (h: SkillHost): string => path.join(os.homedir(), ...h.dir, 'SKILL.md');
 // Read the version stamped in an installed skill's frontmatter (metadata.delegator-skill-version).
+// Scope the search to the FIRST `---`-delimited frontmatter block so a stray line in the body can't be
+// mistaken for the stamp; no frontmatter / no stamp → 'unknown' (treated as stale by scanInstalledSkills).
 function skillVersion(text: string): string {
-  const m = text.replace(/\r\n/g, '\n').match(/^\s*delegator-skill-version:\s*["']?([^"'\n]+?)["']?\s*$/m);
+  const norm = text.replace(/\r\n/g, '\n');
+  const fm = norm.match(/^---\n([\s\S]*?)\n---/);
+  const m = (fm?.[1] ?? '').match(/^\s*delegator-skill-version:\s*["']?([^"'\n]+?)["']?\s*$/m);
   return m?.[1]?.trim() ?? 'unknown';
 }
-// Scan every host's install locations (global + project) for an installed delegator skill and compare
-// it BY CONTENT to the skill this dlg ships. Shared by `dlg skill update` and `dlg doctor`.
-function scanInstalledSkills(): Array<{ host: string; scope: 'global' | 'project'; path: string; installed: string; shipped: string; stale: boolean; template: string[] }> {
-  const scopes: Array<['global' | 'project', string]> = [['global', os.homedir()], ['project', process.cwd()]];
-  const out: Array<{ host: string; scope: 'global' | 'project'; path: string; installed: string; shipped: string; stale: boolean; template: string[] }> = [];
+// Scan the GLOBAL install location of every host for an installed delegator skill and compare its
+// version STAMP (not content) to the stamp this dlg ships. Drives the startup auto-refresh.
+function scanInstalledSkills(): Array<{ host: string; path: string; installed: string; shipped: string; stale: boolean; template: string[] }> {
+  const out: Array<{ host: string; path: string; installed: string; shipped: string; stale: boolean; template: string[] }> = [];
   for (const skillHost of SKILL_HOSTS) {
-    const shippedText = fs.readFileSync(adapterPath(...skillHost.template), 'utf8');
-    const shippedNorm = shippedText.replace(/\r\n/g, '\n');
-    const shipped = skillVersion(shippedText);
-    for (const [scope, base] of scopes) {
-      const p = path.join(base, ...skillHost.dir, 'SKILL.md');
-      if (!fs.existsSync(p)) continue;
-      const curText = fs.readFileSync(p, 'utf8');
-      out.push({ host: skillHost.host, scope, path: p, installed: skillVersion(curText), shipped, stale: curText.replace(/\r\n/g, '\n') !== shippedNorm, template: skillHost.template });
+    const p = path.join(os.homedir(), ...skillHost.dir, 'SKILL.md');
+    if (!fs.existsSync(p)) continue;
+    // Per-host isolation: an unreadable installed file (or a missing shipped template) must not abort the
+    // scan of the OTHER hosts. On a read failure treat the install as stale so the refresh tries to heal
+    // it by overwriting with the shipped copy.
+    try {
+      const shipped = skillVersion(fs.readFileSync(adapterPath(...skillHost.template), 'utf8'));
+      const installed = skillVersion(fs.readFileSync(p, 'utf8'));
+      out.push({ host: skillHost.host, path: p, installed, shipped, stale: installed !== shipped, template: skillHost.template });
+    } catch {
+      out.push({ host: skillHost.host, path: p, installed: 'unreadable', shipped: '', stale: true, template: skillHost.template });
     }
   }
   return out;
@@ -751,10 +790,9 @@ skillCmd
 
 skillCmd
   .command('install <host>')
-  .description('host: claude-code | codex | agent-skills. --project = into the current repo')
-  .option('--project', 'install for the current project only')
+  .description('install a host skill globally — host: claude-code | codex | agent-skills')
   .option('--json', 'output machine-readable JSON')
-  .action((host: string, opts: { project?: boolean; json?: boolean }) => {
+  .action((host: string, opts: { json?: boolean }) => {
     try {
       const skillHost = findSkillHost(host);
       if (!skillHost) {
@@ -763,38 +801,13 @@ skillCmd
         process.exit(2);
         return;
       }
-      const dest = skillDest(skillHost, Boolean(opts.project));
+      const dest = skillDest(skillHost);
       fs.mkdirSync(path.dirname(dest), { recursive: true });
       fs.copyFileSync(adapterPath(...skillHost.template), dest);
-      emit({ host: skillHost.host, installed: true, path: dest, project: Boolean(opts.project) }, () => {
+      emit({ host: skillHost.host, installed: true, path: dest }, () => {
         console.log(`installed skill: ${dest}`);
         console.log(skillHost.installedMsg);
-      }, opts.json);
-    } catch (e) { fail(e); }
-  });
-
-skillCmd
-  .command('update')
-  .description('refresh installed delegator skills to the version this dlg ships (--check only reports)')
-  .option('--check', 'report stale installed skills without changing them')
-  .option('--json', 'output machine-readable JSON')
-  .action((opts: { check?: boolean; json?: boolean }) => {
-    try {
-      const skills = scanInstalledSkills().map((s) => {
-        let action = 'current';
-        if (s.stale) {
-          action = opts.check ? 'stale' : 'updated';
-          if (!opts.check) fs.copyFileSync(adapterPath(...s.template), s.path);
-        }
-        return { host: s.host, scope: s.scope, path: s.path, installed: s.installed, shipped: s.shipped, action };
-      });
-      emit({ ok: true, skills }, () => {
-        if (!skills.length) { console.log('no installed delegator skills found (install one with: dlg skill install <host>)'); return; }
-        for (const r of skills) {
-          if (r.action === 'current') console.log(`current  ${r.host} (${r.scope})  ${r.installed}`);
-          else if (r.action === 'stale') console.log(`stale    ${r.host} (${r.scope})  ${r.installed} -> ${r.shipped}   (run: dlg skill update)`);
-          else console.log(`updated  ${r.host} (${r.scope})  ${r.installed} -> ${r.shipped}`);
-        }
+        console.log('delegator keeps it up to date automatically when you update dlg.');
       }, opts.json);
     } catch (e) { fail(e); }
   });
@@ -950,4 +963,5 @@ defineCommand('clean [id]')
 
 store.setRunsProject(process.cwd()); // runs are grouped per project (override: run --cwd)
 maybeCheckForUpdate();
+maybeAutoUpdateSkills();
 program.parseAsync(process.argv).catch(fail);

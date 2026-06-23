@@ -8,13 +8,14 @@ All notable changes to Delegator are documented here. This project adheres to
 
 ### Added
 - **Universal Agent Skill install:** `dlg skill install agent-skills` (alias `agents-skills`) writes a
-  host-neutral `delegator/SKILL.md` into `~/.agents/skills/delegator/` (or `.agents/skills/delegator/`
-  with `--project`) — discovered by any Agent Skills-compatible agent, with no Claude/Codex
-  flavor. `dlg skill show` now prints this generic skill.
-- **Skill versioning:** every installed host skill carries a `metadata.delegator-skill-version`
-  timestamp; `dlg skill update` refreshes installed skills (all hosts, global + project) to the
-  version this dlg ships, and `--check` reports stale ones without writing; `dlg doctor` flags any
-  stale installed skill.
+  host-neutral `delegator/SKILL.md` into `~/.agents/skills/delegator/` — discovered by any Agent
+  Skills-compatible agent, with no Claude/Codex flavor. `dlg skill show` now prints this generic skill.
+  Host skills install globally only.
+- **Skills auto-update with the binary:** every installed host skill carries a
+  `metadata.delegator-skill-version` timestamp; on startup `dlg` silently refreshes an installed global
+  skill whose stamp differs from the one this `dlg` ships (compared by stamp, never by content) — no
+  command and no flag, updating `dlg` is what updates the skills. The check is cached in the same
+  `update-check.json` (whose writer now merges fields instead of overwriting the whole file).
 - **Per-model concurrency cap:** a model's `limits.concurrent` is now actually enforced — it caps
   concurrent runs of that one model, nested under the provider's `maxConcurrent` (acquired
   provider-first; reads the model's config so it works for both bare `provider/model` handles and

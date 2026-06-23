@@ -32,14 +32,14 @@ Two levels of integration, both optional:
 
 | Target | Command | Where it goes |
 |---|---|---|
-| Claude Code | `dlg skill install claude-code` | `~/.claude/skills/delegator/` (`--project` → `.claude/skills/delegator/`) |
-| Codex | `dlg skill install codex` | `~/.codex/skills/delegator/` (`--project` → `.codex/skills/delegator/`) |
-| **Any Agent Skills-compatible agent** | `dlg skill install agent-skills` | `~/.agents/skills/delegator/` (`--project` → `.agents/skills/delegator/`) |
+| Claude Code | `dlg skill install claude-code` | `~/.claude/skills/delegator/` |
+| Codex | `dlg skill install codex` | `~/.codex/skills/delegator/` |
+| **Any Agent Skills-compatible agent** | `dlg skill install agent-skills` | `~/.agents/skills/delegator/` |
 | **Literally anything else** | `dlg skill show` | prints the skill — paste it into that agent's instruction file (GEMINI.md, rules, system prompt, …) |
 
 So "I have 50 different agents" needs no 50 integrations: one `dlg skill install agent-skills` writes a host-neutral skill into `~/.agents/skills/` that every Agent Skills-compatible agent discovers, and the escape hatch `dlg skill show` covers every other format by copy-paste. The adapter is just text. The guarantee that delegator *works* comes from the CLI; the adapter only improves *when the brain reaches for it*.
 
-**Keeping skills current.** Each installed skill records a version stamp in its frontmatter (`metadata.delegator-skill-version`, a UTC timestamp). After you upgrade `dlg`, run `dlg skill update` to refresh any installed skill whose content differs from the one this `dlg` ships — `--check` previews without writing, and `dlg doctor` flags a stale skill so you know when to run it.
+**Skills stay current on their own.** Each installed skill carries a version stamp (`metadata.delegator-skill-version`, a UTC timestamp). When you update the `dlg` binary, the next `dlg` command silently refreshes the installed global skill to the version this `dlg` ships — no command, no flag (so don't hand-edit the installed global copy; the next update overwrites it). To customize the skill for one project, drop your own `SKILL.md` into that project's skills folder: on Codex/Pi a project skill overrides the global one, but on Claude Code the global (personal) skill wins, so there it can't be overridden per-project.
 
 ## Several agents at once
 

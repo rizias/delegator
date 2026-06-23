@@ -89,29 +89,18 @@ test('shipped codex adapter is a valid Codex skill (SKILL.md frontmatter)', () =
   assert.match(text, /\n---\n/);
 });
 
-test('codex skill install targets skills/delegator/SKILL.md, leaves AGENTS.md', () => {
-  const adapterDir = path.join(root, 'adapters', 'codex', 'skills', 'delegator');
-  const adapterFile = path.join(adapterDir, 'SKILL.md');
-  const hadDir = fs.existsSync(adapterDir);
-  const hadFile = fs.existsSync(adapterFile);
-  const previous = hadFile ? fs.readFileSync(adapterFile, 'utf8') : '';
-  fs.mkdirSync(adapterDir, { recursive: true });
-  fs.writeFileSync(adapterFile, '# codex skill\n', 'utf8');
-  const project = fs.mkdtempSync(path.join(os.tmpdir(), 'dlg-codex-project-'));
-  try {
-    const r = spawnSync(process.execPath, [path.join(root, 'dist', 'cli.js'), 'skill', 'install', 'codex', '--project'], {
-      cwd: project,
-      encoding: 'utf8',
-      env: { ...process.env, CI: '1', DELEGATOR_HOME: fs.mkdtempSync(path.join(os.tmpdir(), 'dlg-codex-home-')) },
-    });
-    assert.equal(r.status, 0, r.stderr);
-    assert.equal(fs.readFileSync(path.join(project, '.codex', 'skills', 'delegator', 'SKILL.md'), 'utf8'), '# codex skill\n');
-    assert.equal(fs.existsSync(path.join(project, 'AGENTS.md')), false);
-  } finally {
-    if (hadFile) fs.writeFileSync(adapterFile, previous, 'utf8');
-    else fs.rmSync(adapterFile, { force: true });
-    if (!hadDir) fs.rmSync(adapterDir, { recursive: true, force: true });
-  }
+test('codex skill install copies the shipped adapter to ~/.codex/skills/delegator/SKILL.md, leaves AGENTS.md', () => {
+  const adapterFile = path.join(root, 'adapters', 'codex', 'skills', 'delegator', 'SKILL.md');
+  const shipped = fs.readFileSync(adapterFile, 'utf8'); // assert against the REAL shipped skill — never mutate a tracked file
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'dlg-codex-home-'));
+  const r = spawnSync(process.execPath, [path.join(root, 'dist', 'cli.js'), 'skill', 'install', 'codex'], {
+    cwd: home,
+    encoding: 'utf8',
+    env: { ...process.env, CI: '1', HOME: home, USERPROFILE: home, DELEGATOR_HOME: fs.mkdtempSync(path.join(os.tmpdir(), 'dlg-codex-dlg-')) },
+  });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(fs.readFileSync(path.join(home, '.codex', 'skills', 'delegator', 'SKILL.md'), 'utf8'), shipped);
+  assert.equal(fs.existsSync(path.join(home, 'AGENTS.md')), false);
 });
 
 test('read commands accept --json and emit parseable JSON', () => {
@@ -177,23 +166,23 @@ test('shipped generic adapter is a valid, host-neutral Agent Skill (SKILL.md)', 
   }
 });
 
-// Both the canonical host and the `agents-skills` alias must install the same SKILL.md into
-// .agents/skills/delegator/ and never write an AGENTS.md (file-based, like the codex install test).
-test('agent-skills skill install writes .agents/skills/delegator/SKILL.md (project); agents-skills alias works', () => {
+// Both the canonical host and the `agents-skills` alias install the same SKILL.md GLOBALLY into
+// ~/.agents/skills/delegator/ and never write an AGENTS.md. HOME is sandboxed.
+test('agent-skills skill install writes ~/.agents/skills/delegator/SKILL.md; agents-skills alias works', () => {
   for (const host of ['agent-skills', 'agents-skills']) {
-    const project = fs.mkdtempSync(path.join(os.tmpdir(), 'dlg-agentskills-project-'));
-    const r = spawnSync(process.execPath, [path.join(root, 'dist', 'cli.js'), 'skill', 'install', host, '--project'], {
-      cwd: project,
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'dlg-agentskills-home-'));
+    const r = spawnSync(process.execPath, [path.join(root, 'dist', 'cli.js'), 'skill', 'install', host], {
+      cwd: home,
       encoding: 'utf8',
-      env: { ...process.env, CI: '1', DELEGATOR_HOME: fs.mkdtempSync(path.join(os.tmpdir(), 'dlg-agentskills-home-')) },
+      env: { ...process.env, CI: '1', HOME: home, USERPROFILE: home, DELEGATOR_HOME: fs.mkdtempSync(path.join(os.tmpdir(), 'dlg-agentskills-dlg-')) },
     });
     assert.equal(r.status, 0, r.stderr);
-    const dest = path.join(project, '.agents', 'skills', 'delegator', 'SKILL.md');
+    const dest = path.join(home, '.agents', 'skills', 'delegator', 'SKILL.md');
     const installed = fs.readFileSync(dest, 'utf8').replace(/\r\n/g, '\n');
     assert.match(installed, /^---\n/);
     assert.match(installed, /^name: delegator$/m);
     // a SKILL.md install must never touch AGENTS.md
-    assert.equal(fs.existsSync(path.join(project, 'AGENTS.md')), false);
+    assert.equal(fs.existsSync(path.join(home, 'AGENTS.md')), false);
   }
 });
 
@@ -213,9 +202,8 @@ test('skill show prints the generic SKILL.md, not an AGENTS.md block', () => {
   assert.doesNotMatch(text, /delegator:begin/);
 });
 
-// each shipped skill carries metadata.delegator-skill-version (a UTC timestamp) in frontmatter; `dlg
-// skill update` refreshes a stale installed skill to the shipped template, --check only reports.
-// HOME/USERPROFILE are sandboxed so the global scan can't pick up real installs on the dev machine.
+// each shipped skill carries metadata.delegator-skill-version (a full ISO-8601 UTC timestamp WITH
+// time) in frontmatter, and all three host skills share ONE global stamp.
 test('shipped skills carry one global ISO-8601 timestamp version', () => {
   const versions = [['claude-code'], ['codex'], ['generic']].map((seg) => {
     const text = fs.readFileSync(path.join(root, 'adapters', ...seg, 'skills', 'delegator', 'SKILL.md'), 'utf8').replace(/\r\n/g, '\n');
@@ -227,51 +215,95 @@ test('shipped skills carry one global ISO-8601 timestamp version', () => {
   assert.equal(new Set(versions).size, 1, `skill versions drifted: ${versions.join(', ')}`);
 });
 
-test('skill update refreshes a stale installed skill; --check only reports', () => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'dlg-update-home-'));
-  const project = fs.mkdtempSync(path.join(os.tmpdir(), 'dlg-update-proj-'));
-  const env = { ...process.env, CI: '1', HOME: home, USERPROFILE: home, DELEGATOR_HOME: fs.mkdtempSync(path.join(os.tmpdir(), 'dlg-update-dlg-')) };
-  const run = (args) => spawnSync(process.execPath, [path.join(root, 'dist', 'cli.js'), ...args], { cwd: project, encoding: 'utf8', env });
-  const entryOf = (out) => JSON.parse(out).skills.find((s) => s.host === 'agent-skills' && s.scope === 'project');
-
-  assert.equal(run(['skill', 'install', 'agent-skills', '--project']).status, 0);
-  const dest = path.join(project, '.agents', 'skills', 'delegator', 'SKILL.md');
-  assert.ok(fs.existsSync(dest));
-
-  // freshly installed → current
-  let r = run(['skill', 'update', '--check', '--json']);
+// no command, no flag: any dlg invocation silently refreshes a stale GLOBAL skill on startup
+// (skipped under CI, so this test runs WITHOUT CI and sandboxes HOME).
+test('startup auto-refreshes a stale installed global skill', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'dlg-auto-home-'));
+  const env = { ...process.env, HOME: home, USERPROFILE: home, DELEGATOR_HOME: fs.mkdtempSync(path.join(os.tmpdir(), 'dlg-auto-dlg-')) };
+  delete env.CI; // auto-update is deliberately skipped under CI
+  const generic = path.join(root, 'adapters', 'generic', 'skills', 'delegator', 'SKILL.md');
+  const shippedVer = fs.readFileSync(generic, 'utf8').match(/delegator-skill-version:\s*["']?([^"'\n]+)/)[1];
+  // pre-stage a STALE global agent-skills install: shipped body, but an old version stamp
+  const dir = path.join(home, '.agents', 'skills', 'delegator');
+  fs.mkdirSync(dir, { recursive: true });
+  const dest = path.join(dir, 'SKILL.md');
+  fs.writeFileSync(dest, fs.readFileSync(generic, 'utf8').replace(/delegator-skill-version:\s*["'][^"'\n]+["']/, 'delegator-skill-version: "2000-01-01T00:00:00Z"'), 'utf8');
+  // any dlg invocation auto-refreshes it on startup (use doctor; it always exits 0)
+  const r = spawnSync(process.execPath, [path.join(root, 'dist', 'cli.js'), 'doctor'], { cwd: home, encoding: 'utf8', env });
   assert.equal(r.status, 0, r.stderr);
-  assert.equal(entryOf(r.stdout).action, 'current');
+  const after = fs.readFileSync(dest, 'utf8').match(/delegator-skill-version:\s*["']?([^"'\n]+)/)[1];
+  assert.equal(after, shippedVer, 'startup should have refreshed the stale skill to the shipped stamp');
+});
 
-  // user drift → stale, and --check must NOT rewrite the file
-  fs.writeFileSync(dest, fs.readFileSync(dest, 'utf8') + '\nlocal drift\n', 'utf8');
-  r = run(['skill', 'update', '--check', '--json']);
-  assert.equal(entryOf(r.stdout).action, 'stale');
-  assert.match(fs.readFileSync(dest, 'utf8'), /local drift/);
+// the skill check and the npm-version check share update-check.json; a write must MERGE one field, not
+// overwrite the whole file. NOTE: this seeds a FRESH checkedAt, so the detached npm child never spawns —
+// it proves the in-process merge helper, not the (accepted best-effort) cross-process timing.
+test('update-check.json is merged, not overwritten', () => {
+  const dlgHome = fs.mkdtempSync(path.join(os.tmpdir(), 'dlg-merge-dlg-'));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'dlg-merge-home-'));
+  const cache = path.join(dlgHome, 'update-check.json');
+  fs.writeFileSync(cache, JSON.stringify({ checkedAt: Date.now(), latest: '99.0.0' }), 'utf8'); // pre-seed the version field
+  const env = { ...process.env, HOME: home, USERPROFILE: home, DELEGATOR_HOME: dlgHome };
+  delete env.CI; // let the skill check run so it writes its own field
+  spawnSync(process.execPath, [path.join(root, 'dist', 'cli.js'), 'doctor'], { cwd: home, encoding: 'utf8', env });
+  const merged = JSON.parse(fs.readFileSync(cache, 'utf8'));
+  assert.equal(merged.latest, '99.0.0', 'the npm-version field must survive the skill check');
+  assert.ok(merged.skillCheckedVersion !== undefined, 'the skill check must add its own field');
+});
 
-  // update (no --check) → refreshed back to the shipped template
-  r = run(['skill', 'update', '--json']);
-  assert.equal(entryOf(r.stdout).action, 'updated');
-  const shipped = fs.readFileSync(path.join(root, 'adapters', 'generic', 'skills', 'delegator', 'SKILL.md'), 'utf8').replace(/\r\n/g, '\n');
-  assert.equal(fs.readFileSync(dest, 'utf8').replace(/\r\n/g, '\n'), shipped);
+// a missing stamp (no metadata.delegator-skill-version line at all) must count as stale and be refreshed.
+test('startup refreshes a global skill whose version stamp is missing entirely', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'dlg-nostamp-home-'));
+  const env = { ...process.env, HOME: home, USERPROFILE: home, DELEGATOR_HOME: fs.mkdtempSync(path.join(os.tmpdir(), 'dlg-nostamp-dlg-')) };
+  delete env.CI;
+  const generic = path.join(root, 'adapters', 'generic', 'skills', 'delegator', 'SKILL.md');
+  const dir = path.join(home, '.agents', 'skills', 'delegator');
+  fs.mkdirSync(dir, { recursive: true });
+  const dest = path.join(dir, 'SKILL.md');
+  fs.writeFileSync(dest, fs.readFileSync(generic, 'utf8').replace(/\n\s*delegator-skill-version:[^\n]*/, ''), 'utf8'); // strip the stamp line
+  assert.doesNotMatch(fs.readFileSync(dest, 'utf8'), /delegator-skill-version/);
+  const r = spawnSync(process.execPath, [path.join(root, 'dist', 'cli.js'), 'doctor'], { cwd: home, encoding: 'utf8', env });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(fs.readFileSync(dest, 'utf8'), /delegator-skill-version:/, 'a stamp-less skill must be refreshed to the shipped copy');
+});
+
+// the stamp is read ONLY from frontmatter: a stray version line in the BODY must not mask a missing
+// frontmatter stamp (such a file is 'unknown' -> stale -> refreshed).
+test('startup ignores a delegator-skill-version line in the body, not the frontmatter', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'dlg-bodystamp-home-'));
+  const env = { ...process.env, HOME: home, USERPROFILE: home, DELEGATOR_HOME: fs.mkdtempSync(path.join(os.tmpdir(), 'dlg-bodystamp-dlg-')) };
+  delete env.CI;
+  const generic = path.join(root, 'adapters', 'generic', 'skills', 'delegator', 'SKILL.md');
+  const shipped = fs.readFileSync(generic, 'utf8');
+  const shippedVer = shipped.match(/delegator-skill-version:\s*["']?([^"'\n]+)/)[1];
+  const dir = path.join(home, '.agents', 'skills', 'delegator');
+  fs.mkdirSync(dir, { recursive: true });
+  const dest = path.join(dir, 'SKILL.md');
+  // remove the frontmatter stamp, but plant the SHIPPED stamp as a column-0 body line — must still be 'unknown'
+  const tampered = shipped.replace(/\n\s*delegator-skill-version:[^\n]*/, '') + `\n\ndelegator-skill-version: "${shippedVer}"\n`;
+  fs.writeFileSync(dest, tampered, 'utf8');
+  const r = spawnSync(process.execPath, [path.join(root, 'dist', 'cli.js'), 'doctor'], { cwd: home, encoding: 'utf8', env });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(fs.readFileSync(dest, 'utf8'), shipped, 'a body-only stamp must not count as current; the skill must be refreshed');
+});
+
+// under CI, auto-refresh must be SKIPPED — a stale installed skill is left untouched.
+test('startup does NOT refresh skills under CI', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'dlg-ci-home-'));
+  const env = { ...process.env, CI: '1', HOME: home, USERPROFILE: home, DELEGATOR_HOME: fs.mkdtempSync(path.join(os.tmpdir(), 'dlg-ci-dlg-')) };
+  const generic = path.join(root, 'adapters', 'generic', 'skills', 'delegator', 'SKILL.md');
+  const dir = path.join(home, '.agents', 'skills', 'delegator');
+  fs.mkdirSync(dir, { recursive: true });
+  const dest = path.join(dir, 'SKILL.md');
+  const stale = fs.readFileSync(generic, 'utf8').replace(/delegator-skill-version:\s*["'][^"'\n]+["']/, 'delegator-skill-version: "2000-01-01T00:00:00Z"');
+  fs.writeFileSync(dest, stale, 'utf8');
+  const r = spawnSync(process.execPath, [path.join(root, 'dist', 'cli.js'), 'doctor'], { cwd: home, encoding: 'utf8', env });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(fs.readFileSync(dest, 'utf8'), /delegator-skill-version: "2000-01-01T00:00:00Z"/, 'under CI the stale skill must be left untouched');
 });
 
 test('key list --json emits JSON (the parent command no longer shadows the flag)', () => {
   const r = runCli(['key', 'list', '--json']);
   assert.equal(r.status, 0, r.stderr);
   assert.doesNotThrow(() => JSON.parse(r.stdout), `key list --json must emit JSON, got:\n${r.stdout}`);
-});
-
-test('dlg doctor flags a stale installed skill', () => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'dlg-doctor-home-'));
-  const project = fs.mkdtempSync(path.join(os.tmpdir(), 'dlg-doctor-proj-'));
-  const env = { ...process.env, CI: '1', HOME: home, USERPROFILE: home, DELEGATOR_HOME: fs.mkdtempSync(path.join(os.tmpdir(), 'dlg-doctor-dlg-')) };
-  const run = (args) => spawnSync(process.execPath, [path.join(root, 'dist', 'cli.js'), ...args], { cwd: project, encoding: 'utf8', env });
-  assert.equal(run(['skill', 'install', 'agent-skills', '--project']).status, 0);
-  const dest = path.join(project, '.agents', 'skills', 'delegator', 'SKILL.md');
-  fs.writeFileSync(dest, fs.readFileSync(dest, 'utf8') + '\nlocal drift\n', 'utf8'); // make it stale
-  const r = run(['doctor']);
-  assert.equal(r.status, 0, r.stderr);
-  assert.match(r.stdout, /STALE/);
-  assert.match(r.stdout, /dlg skill update/);
 });
