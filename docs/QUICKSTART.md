@@ -136,15 +136,15 @@ dlg undo   <runId>      # roll an applied run back
 ## Let a host agent delegate (or drive `dlg` yourself)
 
 Everything above you can run by hand in a terminal. To let a host **agent** (Claude Code, Codex)
-*decide to delegate on its own*, install its instruction pack — it teaches the agent when and how to
+*decide to delegate on its own*, install its skill — it teaches the agent when and how to
 call `dlg`, with nothing added to your project:
 
 ```bash
 dlg skill install claude-code      # or: codex | agent-skills (universal — any Agent Skills-compatible agent)
 ```
 
-**Without the pack** delegator still works — but the agent doesn't know it exists, so you drive `dlg`
-yourself (or tell the agent "use `dlg` to delegate this" each time). The pack is what makes an agent
+**Without the skill** delegator still works — but the agent doesn't know it exists, so you drive `dlg`
+yourself (or tell the agent "use `dlg` to delegate this" each time). The skill is what makes an agent
 delegate automatically.
 
 ## Reset / uninstall
@@ -165,7 +165,7 @@ dlg init                # recreate fresh templates
 npm uninstall -g @rizias/delegator
 ```
 
-**Remove installed host packs** (only if you ran `dlg skill install`):
+**Remove installed host skills** (only if you ran `dlg skill install`):
 
 ```bash
 rm -rf ~/.claude/skills/delegator      # Claude Code   (project install: ./.claude/skills/delegator)

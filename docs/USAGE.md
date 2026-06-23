@@ -28,7 +28,7 @@ Handles shown here are examples; yours depend on your config.
 Two levels of integration, both optional:
 
 1. **Bare CLI** — works in any agent today, zero setup. The brain runs `dlg …` like any tool.
-2. **Host adapter (instruction pack)** — teaches that specific host *when* and *how* to delegate, in its native format. Same CLI underneath.
+2. **Host adapter (skill)** — teaches that specific host *when* and *how* to delegate, in its native format. Same CLI underneath.
 
 | Target | Command | Where it goes |
 |---|---|---|
@@ -38,6 +38,8 @@ Two levels of integration, both optional:
 | **Literally anything else** | `dlg skill show` | prints the skill — paste it into that agent's instruction file (GEMINI.md, rules, system prompt, …) |
 
 So "I have 50 different agents" needs no 50 integrations: one `dlg skill install agent-skills` writes a host-neutral skill into `~/.agents/skills/` that every Agent Skills-compatible agent discovers, and the escape hatch `dlg skill show` covers every other format by copy-paste. The adapter is just text. The guarantee that delegator *works* comes from the CLI; the adapter only improves *when the brain reaches for it*.
+
+**Keeping skills current.** Each installed skill records a version stamp in its frontmatter (`metadata.delegator-skill-version`, a UTC timestamp). After you upgrade `dlg`, run `dlg skill update` to refresh any installed skill whose content differs from the one this `dlg` ships — `--check` previews without writing, and `dlg doctor` flags a stale skill so you know when to run it.
 
 ## Several agents at once
 

@@ -13,7 +13,8 @@ All notable changes to Delegator are documented here. This project adheres to
   flavor. `dlg skill show` now prints this generic skill.
 - **Skill versioning:** every installed host skill carries a `metadata.delegator-skill-version`
   timestamp; `dlg skill update` refreshes installed skills (all hosts, global + project) to the
-  version this dlg ships, and `--check` reports stale ones without writing.
+  version this dlg ships, and `--check` reports stale ones without writing; `dlg doctor` flags any
+  stale installed skill.
 - **Per-model concurrency cap:** a model's `limits.concurrent` is now actually enforced — it caps
   concurrent runs of that one model, nested under the provider's `maxConcurrent` (acquired
   provider-first; reads the model's config so it works for both bare `provider/model` handles and
@@ -25,6 +26,9 @@ All notable changes to Delegator are documented here. This project adheres to
   into any instruction file) instead.
 
 ### Fixed
+- **`dlg key … --json`:** the key subcommands (`set`/`add`/`list`) now actually emit JSON — a
+  duplicate `--json` on the parent `key` command had been swallowing the flag (same root cause as the
+  `skill` subcommands).
 - **z.ai / GLM reasoning effort:** the `claude` runtime catalog and the shipped z.ai example now
   declare the full Claude-Code effort vocabulary — `low, medium, high, xhigh, max, ultracode` — matching
   z.ai's published table, so `--effort max`/`ultracode` are accepted instead of rejected. z.ai folds them

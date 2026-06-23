@@ -290,7 +290,7 @@ function applyEquipment(id: string, ctx: RuntimeContext, spec: SpawnSpec): void 
   }
 
   if (id === 'pi') {
-    // worker-runtime equipment (CLI --skill toggles), NOT host instruction packs
+    // worker-runtime equipment (CLI --skill toggles), NOT host skills
     for (const skill of ctx.resolved.worker.equip?.skills ?? []) {
       spec.args.push('--skill', skill);
     }

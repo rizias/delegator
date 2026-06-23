@@ -70,14 +70,15 @@ test('startup version check does not break a normal json command', () => {
   assert.deepEqual(JSON.parse(out), []);
 });
 
-test('skill help distinguishes host instruction packs from worker runtime equipment', () => {
+test('skill help distinguishes a host skill from worker runtime equipment', () => {
   const r = runCli(['skill', '--help']);
   assert.equal(r.status, 0);
-  assert.match(r.stdout, /install HOST instruction packs/);
-  assert.match(r.stdout, /NOT the per-worker equip\.skills CLI toggles/);
+  const help = r.stdout.replace(/\s+/g, ' '); // commander wraps long descriptions; normalize whitespace
+  assert.match(help, /install a host skill/);
+  assert.match(help, /NOT the per-worker equip\.skills CLI toggles/);
 });
 
-// The shipped codex pack must be a discoverable Codex skill: valid YAML frontmatter
+// The shipped codex SKILL.md must be discoverable by Codex: valid YAML frontmatter
 // (name + description) or Codex never surfaces it. CRLF is normalized so the guard
 // holds on Windows checkouts — a literal \n match would be brittle.
 test('shipped codex adapter is a valid Codex skill (SKILL.md frontmatter)', () => {
@@ -95,7 +96,7 @@ test('codex skill install targets skills/delegator/SKILL.md, leaves AGENTS.md', 
   const hadFile = fs.existsSync(adapterFile);
   const previous = hadFile ? fs.readFileSync(adapterFile, 'utf8') : '';
   fs.mkdirSync(adapterDir, { recursive: true });
-  fs.writeFileSync(adapterFile, '# codex pack\n', 'utf8');
+  fs.writeFileSync(adapterFile, '# codex skill\n', 'utf8');
   const project = fs.mkdtempSync(path.join(os.tmpdir(), 'dlg-codex-project-'));
   try {
     const r = spawnSync(process.execPath, [path.join(root, 'dist', 'cli.js'), 'skill', 'install', 'codex', '--project'], {
@@ -104,7 +105,7 @@ test('codex skill install targets skills/delegator/SKILL.md, leaves AGENTS.md', 
       env: { ...process.env, CI: '1', DELEGATOR_HOME: fs.mkdtempSync(path.join(os.tmpdir(), 'dlg-codex-home-')) },
     });
     assert.equal(r.status, 0, r.stderr);
-    assert.equal(fs.readFileSync(path.join(project, '.codex', 'skills', 'delegator', 'SKILL.md'), 'utf8'), '# codex pack\n');
+    assert.equal(fs.readFileSync(path.join(project, '.codex', 'skills', 'delegator', 'SKILL.md'), 'utf8'), '# codex skill\n');
     assert.equal(fs.existsSync(path.join(project, 'AGENTS.md')), false);
   } finally {
     if (hadFile) fs.writeFileSync(adapterFile, previous, 'utf8');
@@ -253,4 +254,24 @@ test('skill update refreshes a stale installed skill; --check only reports', () 
   assert.equal(entryOf(r.stdout).action, 'updated');
   const shipped = fs.readFileSync(path.join(root, 'adapters', 'generic', 'skills', 'delegator', 'SKILL.md'), 'utf8').replace(/\r\n/g, '\n');
   assert.equal(fs.readFileSync(dest, 'utf8').replace(/\r\n/g, '\n'), shipped);
+});
+
+test('key list --json emits JSON (the parent command no longer shadows the flag)', () => {
+  const r = runCli(['key', 'list', '--json']);
+  assert.equal(r.status, 0, r.stderr);
+  assert.doesNotThrow(() => JSON.parse(r.stdout), `key list --json must emit JSON, got:\n${r.stdout}`);
+});
+
+test('dlg doctor flags a stale installed skill', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'dlg-doctor-home-'));
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), 'dlg-doctor-proj-'));
+  const env = { ...process.env, CI: '1', HOME: home, USERPROFILE: home, DELEGATOR_HOME: fs.mkdtempSync(path.join(os.tmpdir(), 'dlg-doctor-dlg-')) };
+  const run = (args) => spawnSync(process.execPath, [path.join(root, 'dist', 'cli.js'), ...args], { cwd: project, encoding: 'utf8', env });
+  assert.equal(run(['skill', 'install', 'agent-skills', '--project']).status, 0);
+  const dest = path.join(project, '.agents', 'skills', 'delegator', 'SKILL.md');
+  fs.writeFileSync(dest, fs.readFileSync(dest, 'utf8') + '\nlocal drift\n', 'utf8'); // make it stale
+  const r = run(['doctor']);
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /STALE/);
+  assert.match(r.stdout, /dlg skill update/);
 });

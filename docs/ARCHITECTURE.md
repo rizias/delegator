@@ -19,7 +19,7 @@ Core invariants:
 - The core makes no LLM routing or planning decisions.
 - Every run is bounded by wall-clock time, stall detection, and silence detection.
 - Workers are untrusted: verification and apply decisions belong to the core and the Brain, not to worker self-report.
-- The common interface is the CLI plus instruction packs for host agents.
+- The common interface is the CLI plus host skills for agents.
 
 ---
 

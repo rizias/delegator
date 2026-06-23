@@ -262,6 +262,8 @@ defineCommand('doctor')
     } catch (e) {
       configError = String(e instanceof Error ? e.message : e);
     }
+    let staleSkills: Array<{ host: string; scope: 'global' | 'project'; installed: string; shipped: string }> = [];
+    try { staleSkills = scanInstalledSkills().filter((s) => s.stale).map((s) => ({ host: s.host, scope: s.scope, installed: s.installed, shipped: s.shipped })); } catch { /* doctor is best-effort */ }
     emit({
       node: { version: node, ok: Number(node.split('.')[0]) >= 20 },
       binaries,
@@ -277,6 +279,7 @@ defineCommand('doctor')
         },
       } : {}),
       ...(configError ? { configError } : {}),
+      ...(staleSkills.length ? { staleSkills } : {}),
     }, () => {
       console.log(`node: ${node} ${Number(node.split('.')[0]) >= 20 ? 'ok' : 'TOO OLD (need >=20)'}`);
       for (const bin of ['git', 'claude', 'codex', 'opencode', 'pi']) {
@@ -295,10 +298,17 @@ defineCommand('doctor')
       } else {
         console.log(`config not loadable: ${configError}`);
       }
+      if (staleSkills.length) {
+        console.log(`skills: ${staleSkills.length} installed skill(s) STALE — run: dlg skill update`);
+        for (const s of staleSkills) console.log(`  ${s.host} (${s.scope}): ${s.installed} -> ${s.shipped}`);
+      }
     }, opts.json);
   });
 
-const keyCmd = defineCommand('key')
+// A plain program.command (not defineCommand): the `key` group has no action of its own, and adding
+// `--json` here would shadow the same flag on its set/add/list subcommands (a duplicate parent option
+// swallows the child's value), so per-subcommand `--json` would silently stop working.
+const keyCmd = program.command('key')
   .description('manage provider API keys (secrets.yaml — never readable by agents)');
 
 function registryProviderIds(): string[] | null {
@@ -684,7 +694,7 @@ function adapterPath(...segments: string[]): string {
 // adding `--json` here would shadow the same flag on its show/install/update subcommands (a duplicate
 // parent option swallows the child's value), so per-subcommand `--json` would silently stop working.
 const skillCmd = program.command('skill')
-  .description('install HOST instruction packs (teach an orchestrator when/how to delegate) — NOT the per-worker equip.skills CLI toggles');
+  .description('install a host skill (teach an orchestrator when/how to delegate) — NOT the per-worker equip.skills CLI toggles');
 
 // Bundled host skills. ONE table drives install, update, and the supported-host list so the paths
 // can never drift. Each host's SKILL.md frontmatter carries metadata.delegator-skill-version (a UTC
@@ -706,6 +716,24 @@ const skillDest = (h: SkillHost, project: boolean): string =>
 function skillVersion(text: string): string {
   const m = text.replace(/\r\n/g, '\n').match(/^\s*delegator-skill-version:\s*["']?([^"'\n]+?)["']?\s*$/m);
   return m?.[1]?.trim() ?? 'unknown';
+}
+// Scan every host's install locations (global + project) for an installed delegator skill and compare
+// it BY CONTENT to the skill this dlg ships. Shared by `dlg skill update` and `dlg doctor`.
+function scanInstalledSkills(): Array<{ host: string; scope: 'global' | 'project'; path: string; installed: string; shipped: string; stale: boolean; template: string[] }> {
+  const scopes: Array<['global' | 'project', string]> = [['global', os.homedir()], ['project', process.cwd()]];
+  const out: Array<{ host: string; scope: 'global' | 'project'; path: string; installed: string; shipped: string; stale: boolean; template: string[] }> = [];
+  for (const skillHost of SKILL_HOSTS) {
+    const shippedText = fs.readFileSync(adapterPath(...skillHost.template), 'utf8');
+    const shippedNorm = shippedText.replace(/\r\n/g, '\n');
+    const shipped = skillVersion(shippedText);
+    for (const [scope, base] of scopes) {
+      const p = path.join(base, ...skillHost.dir, 'SKILL.md');
+      if (!fs.existsSync(p)) continue;
+      const curText = fs.readFileSync(p, 'utf8');
+      out.push({ host: skillHost.host, scope, path: p, installed: skillVersion(curText), shipped, stale: curText.replace(/\r\n/g, '\n') !== shippedNorm, template: skillHost.template });
+    }
+  }
+  return out;
 }
 
 skillCmd
@@ -752,25 +780,14 @@ skillCmd
   .option('--json', 'output machine-readable JSON')
   .action((opts: { check?: boolean; json?: boolean }) => {
     try {
-      const scopes: Array<['global' | 'project', string]> = [['global', os.homedir()], ['project', process.cwd()]];
-      const skills: Array<{ host: string; scope: 'global' | 'project'; path: string; installed: string; shipped: string; action: string }> = [];
-      for (const skillHost of SKILL_HOSTS) {
-        const shippedText = fs.readFileSync(adapterPath(...skillHost.template), 'utf8');
-        const shippedVer = skillVersion(shippedText);
-        const shippedNorm = shippedText.replace(/\r\n/g, '\n');
-        for (const [scope, base] of scopes) {
-          const dest = path.join(base, ...skillHost.dir, 'SKILL.md');
-          if (!fs.existsSync(dest)) continue;
-          const curText = fs.readFileSync(dest, 'utf8');
-          const stale = curText.replace(/\r\n/g, '\n') !== shippedNorm;
-          let action = 'current';
-          if (stale) {
-            action = opts.check ? 'stale' : 'updated';
-            if (!opts.check) fs.copyFileSync(adapterPath(...skillHost.template), dest);
-          }
-          skills.push({ host: skillHost.host, scope, path: dest, installed: skillVersion(curText), shipped: shippedVer, action });
+      const skills = scanInstalledSkills().map((s) => {
+        let action = 'current';
+        if (s.stale) {
+          action = opts.check ? 'stale' : 'updated';
+          if (!opts.check) fs.copyFileSync(adapterPath(...s.template), s.path);
         }
-      }
+        return { host: s.host, scope: s.scope, path: s.path, installed: s.installed, shipped: s.shipped, action };
+      });
       emit({ ok: true, skills }, () => {
         if (!skills.length) { console.log('no installed delegator skills found (install one with: dlg skill install <host>)'); return; }
         for (const r of skills) {
