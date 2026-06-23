@@ -45,7 +45,9 @@ jobs:
         run: |
           git config user.name "rizias"
           git config user.email "42223893+rizias@users.noreply.github.com"
-      - run: npm version ${{ inputs.bump }}   # bumps package.json + lock, commits, tags vX.Y.Z
+      - run: npm version ${{ inputs.bump }}   # bumps package.json + lock; the `version` npm hook also
+                                              # promotes CHANGELOG [Unreleased] -> the new version + date
+                                              # and git-adds it; then commits all of it and tags vX.Y.Z
       # Push the version commit + tag BEFORE publishing. If publish later fails, the tag is
       # already in the repo and you can just re-run publish — recoverable. The other direction
       # (publish succeeds, push fails) leaves npm with a version that has no matching tag, which

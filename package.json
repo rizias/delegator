@@ -53,7 +53,8 @@
     "check": "tsc -p tsconfig.json --noEmit",
     "prepack": "npm run build",
     "prepublishOnly": "npm test",
-    "test": "npm run build && node --test"
+    "test": "npm run build && node --test",
+    "version": "node scripts/changelog-release.mjs"
   },
   "publishConfig": {
     "access": "public"
