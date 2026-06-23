@@ -6,6 +6,8 @@ All notable changes to Delegator are documented here. This project adheres to
 
 ## [Unreleased]
 
+## [0.3.23] — 2026-06-23
+
 ### Added
 - **Universal Agent Skill install:** `dlg skill install agent-skills` (alias `agents-skills`) writes a
   host-neutral `delegator/SKILL.md` into `~/.agents/skills/delegator/` — discovered by any Agent

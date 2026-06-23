@@ -1,6 +1,6 @@
 {
   "name": "@rizias/delegator",
-  "version": "0.3.22",
+  "version": "0.3.23",
   "private": false,
   "description": "Dispatch bounded coding tasks from your main AI agent to separate model pools, then verify the patches locally.",
   "author": "Max Smirnov",
