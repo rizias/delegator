@@ -514,10 +514,25 @@ async function runWorkerAttempt(
 
   // Concurrency gate: claim a slot BEFORE creating a worktree so a
   // queued run holds no disk while it waits, and a queue timeout leaks nothing.
+  // There are TWO nested gates, acquired in a fixed order (provider → model) to
+  // avoid deadlock: the provider/group gate bounds total runs against a provider,
+  // the model gate bounds concurrent runs OF ONE MODEL (limits.concurrent) on top.
   const scope = resolved.provider.concurrencyGroup ?? resolved.providerId;
   const limit = resolved.provider.maxConcurrent ?? 0; // 0 = unbounded
-  if (limit > 0) store.updateMeta(id, { state: 'queued' });
-  const slot = await acquireSlot(scope, {
+  // Model-level gate (limits.concurrent on the model/worker). Distinct, collision-safe
+  // scope key so it never overlaps the provider scope. 0/absent = unbounded at the
+  // model level → no second gate, behaves exactly as before.
+  // limits.concurrent is merged onto the worker for bare `provider/model` handles
+  // (config.ts withModelDefaults), but the named-worker `workers:` loop does NOT copy it
+  // — so fall back to the model's own config so the cap works for both. The worker's own
+  // value wins (an explicit override), then the model default.
+  const modelId = resolved.worker.model ?? resolved.workerId;
+  const modelLimit = resolved.worker.limits?.concurrent
+    ?? (resolved.worker.model ? resolved.provider.models?.[resolved.worker.model]?.limits?.concurrent : undefined)
+    ?? 0;
+  const modelScope = `${resolved.providerId}/${modelId}`;
+  if (limit > 0 || modelLimit > 0) store.updateMeta(id, { state: 'queued' });
+  const providerSlot = await acquireSlot(scope, {
     limit,
     runId: id,
     queueTimeoutMs: cfg.defaults.queueTimeoutSeconds * 1000,
@@ -529,7 +544,7 @@ async function runWorkerAttempt(
       });
     },
   });
-  if (!slot) {
+  if (!providerSlot) {
     // A concurrency queue timeout is NOT a provider failure — it does not fall
     // over (§8: the Brain decides whether to wait or reroute on capacity).
     return reject(
@@ -538,6 +553,45 @@ async function runWorkerAttempt(
       [{ type: 'internal', message: `concurrency queue timeout (scope ${scope}, limit ${limit})` }],
       '', null,
     );
+  }
+
+  // Second gate: the model-scoped cap. Acquired AFTER the provider slot, in the
+  // same order on every run (no deadlock). If it times out, release the
+  // already-held provider slot first and end the run exactly like a provider
+  // queue timeout — same `rejected` status, clear queue-timeout reason, no leak.
+  let slot: SlotHandle = providerSlot;
+  if (modelLimit > 0) {
+    const modelSlot = await acquireSlot(modelScope, {
+      limit: modelLimit,
+      runId: id,
+      queueTimeoutMs: cfg.defaults.queueTimeoutSeconds * 1000,
+      pollMs: cfg.defaults.queuePollSeconds * 1000,
+      onWait: (ms) => {
+        store.appendEvent(id, {
+          ts: Date.now(), stream: 'system', kind: 'output',
+          raw: `queued: model "${modelScope}" at capacity (${modelLimit}); waiting for a free slot (${Math.round(ms / 1000)}s)`,
+        });
+      },
+    });
+    if (!modelSlot) {
+      providerSlot.release(); // give back the provider slot we are NOT going to use
+      return reject(
+        'rejected',
+        `queue timeout: model "${modelScope}" stayed full for ${cfg.defaults.queueTimeoutSeconds}s`,
+        [{ type: 'internal', message: `concurrency queue timeout (model ${modelScope}, limit ${modelLimit})` }],
+        '', null,
+      );
+    }
+    // Compose both handles into one: releasing it frees BOTH slots on every exit
+    // path (success / failure / kill / timeout), so the existing single-slot
+    // release sites below need no change.
+    const prov = providerSlot;
+    const mdl = modelSlot;
+    slot = {
+      slot: prov.slot,
+      waitedMs: prov.waitedMs + mdl.waitedMs,
+      release: () => { prov.release(); mdl.release(); },
+    };
   }
 
   // In-process runtimes (api-oneshot: one HTTP call) take a separate path. There is no

@@ -1,7 +1,7 @@
 name: Release
 
 # One-button release. Actions tab → "Release" → Run workflow → pick patch / minor / major.
-# It runs tests, bumps the version, publishes to npm, and pushes the version commit + tag.
+# It runs tests, bumps the version, pushes the version commit + tag, then publishes to npm.
 #
 # npm auth uses OIDC Trusted Publishing (no NPM_TOKEN secret). One-time setup on npmjs.com:
 #   package → Settings → Trusted Publisher → GitHub Actions →
@@ -22,6 +22,12 @@ permissions:
   contents: write   # push the version commit + tag back to main
   id-token: write   # OIDC Trusted Publishing to npm
 
+# Serialize releases: two manual runs from the same HEAD would otherwise both bump to the
+# same next semver and race on publish/push. A second release waits for the first.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
   release:
     runs-on: ubuntu-latest
@@ -40,5 +46,9 @@ jobs:
           git config user.name "rizias"
           git config user.email "42223893+rizias@users.noreply.github.com"
       - run: npm version ${{ inputs.bump }}   # bumps package.json + lock, commits, tags vX.Y.Z
-      - run: npm publish                       # OIDC; prepublishOnly reruns the tests
+      # Push the version commit + tag BEFORE publishing. If publish later fails, the tag is
+      # already in the repo and you can just re-run publish — recoverable. The other direction
+      # (publish succeeds, push fails) leaves npm with a version that has no matching tag, which
+      # is irreversible on the npm side, so push-first is the safer order.
       - run: git push --follow-tags
+      - run: npm publish                       # OIDC; prepublishOnly reruns the tests

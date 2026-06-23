@@ -20,7 +20,9 @@ Creates `~/.delegator/`:
 
 - `providers.yaml` — the registry you edit (providers, models, `defaults`). Starts empty.
 - `runtimes.yaml` — optional overrides for the built-in runtimes (most users never touch it).
-- `secrets.example.yaml` — the format guide for your real `secrets.yaml`.
+- `secrets.yaml` — your API keys, created with commented examples. Edit it directly, or run
+  `dlg key set <provider>` (reads the key from stdin, so it never lands in shell history).
+- `secrets.example.yaml` — a read-only reference copy of that template.
 
 ## 3. Add a worker
 
@@ -116,8 +118,10 @@ dlg run -w zai/glm-5 --task "Add a --version flag to src/cli.ts" --budget 10m --
 dlg run -w openai-codex/gpt-5.5 -f brief.md --budget 15m --effort high
 ```
 
-Delegator isolates the work in a fresh git worktree, runs it bounded, verifies it, and prints a typed
-**envelope**: status, the diff, and run stats (wall-clock time, model turns, tokens incl. reasoning).
+For a CLI/agentic worker, Delegator isolates the work in a fresh git worktree, runs it bounded, verifies
+it, and prints a typed **envelope**: status, the diff, and run stats (wall-clock time, model turns,
+tokens incl. reasoning). A direct `api` worker is just one HTTP call — it returns text, with no worktree
+or patch.
 
 ## 6. Review and apply
 

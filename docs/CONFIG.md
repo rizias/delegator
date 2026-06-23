@@ -285,6 +285,16 @@ outside it is rejected at run time:
 CLI --effort <level>  >  model reasoningEffort.default  >  runtime effortLevels.default
 ```
 
+> **Caution — delegator validates a level against the catalog, but does NOT verify the provider honors
+> it distinctly.** A valid level is passed verbatim to the worker. Most providers (OpenAI, native
+> Anthropic) *reject* an unsupported level with an HTTP error, so a wrong level fails loudly. But some
+> *map* several levels onto fewer real modes silently — notably **z.ai / GLM-5.2 has only two reasoning
+> modes (high, max)** and folds Claude-Code `low`/`medium`/`high` → GLM `high`, `xhigh` → GLM `max`
+> ([z.ai docs](https://docs.z.ai/devpack/tool/claude)). This is NOT an error — z.ai does the mapping.
+> The shipped z.ai example keeps every level valid and just sets `default: xhigh` (= GLM `max`) so a bare
+> run gets GLM's deepest mode; `--effort low`/`medium`/`high` simply run GLM `high`. (A general,
+> provider-aware level translation is tracked as a future `effortMap`.)
+
 ## Defaults
 
 `defaults` supplies run-level behavior and the bare `dlg run` target.

@@ -80,10 +80,20 @@ providers:
     keyEnv: ZAI_API_KEY                        # NAME only; the actual key goes in secrets.yaml
     maxConcurrent: 1                           # z.ai limits are per-model — set yours: https://z.ai/manage-apikey/rate-limits
     models:
+      # GLM has 2 real reasoning modes. z.ai maps Claude-Code low/medium/high → GLM "high" and
+      # xhigh → GLM "max" (https://docs.z.ai/devpack/tool/claude). EVERY level just works — z.ai does
+      # the mapping, nothing is rejected. We only set the DEFAULT to xhigh so a bare run gets GLM's
+      # deepest "max" mode (z.ai recommends max for coding); pass --effort low/medium/high to run "high".
       glm-5.2:
         contextWindow: 200000
+        reasoningEffort:
+          levels: [low, medium, high, xhigh]
+          default: xhigh
       glm-5.2[1m]:
         contextWindow: 1000000
+        reasoningEffort:
+          levels: [low, medium, high, xhigh]
+          default: xhigh
 
   # → runtime: api
   # OpenAI-compatible HTTP API. keyEnv names the environment variable fallback.
@@ -102,7 +112,7 @@ providers:
         budget:
           wallClock: 15m
         limits:
-          concurrent: 1
+          concurrent: 1  # at most 1 concurrent run of THIS model (nested under the provider's maxConcurrent)
         fallback:
           - opencode/opencode/north-mini-code-free
           - local/gpt-5.5

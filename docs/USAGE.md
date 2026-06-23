@@ -32,7 +32,7 @@ Two levels of integration, both optional:
 
 | Target | Command | Where it goes |
 |---|---|---|
-| Claude Code | `dlg skill install claude-code` | `~/.claude/skills/delegator/` (`--project` → `.claude/skills/`) |
+| Claude Code | `dlg skill install claude-code` | `~/.claude/skills/delegator/` (`--project` → `.claude/skills/delegator/`) |
 | Codex | `dlg skill install codex` | `~/.codex/skills/delegator/` (`--project` → `.codex/skills/delegator/`) |
 | **Any AGENTS.md-reading agent** (OpenCode, Pi, Hermes, Codex, …) | `dlg skill install agents-md` | repo `AGENTS.md` (managed block, re-runnable) |
 | **Literally anything else** | `dlg skill show` | prints the block — paste it into that agent's instruction file (GEMINI.md, rules, system prompt, …) |
@@ -45,7 +45,7 @@ Open Claude Code, Codex, and OpenCode in the same repo simultaneously — all th
 
 - They share `~/.delegator/` (providers, secrets, key pools) — one place to configure.
 - Runs are grouped per project and each run gets its own git worktree, so concurrent runs never collide in the filesystem.
-- Each *worker* still processes **one run at a time** (the current single-run-per-worker regime — see [verification-model.md](verification-model.md) §1); parallel dispatches to the same worker queue rather than overlapping. Parallelism across *different* workers/hosts is free.
+- A *provider* runs **unbounded by default** — cap it with `maxConcurrent` (e.g. `maxConcurrent: 1` for one run at a time; a model can also cap itself with `limits.concurrent` — see [verification-model.md](verification-model.md) §1). Dispatches past a cap queue rather than overlap. Parallelism across *different* providers/hosts is always free.
 - A run id is global; `dlg status` from any host sees all runs for that project.
 
 So "I want each of them to use delegator" = install each host's adapter once (or just rely on the bare CLI). No per-host servers, no coordination.

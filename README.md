@@ -12,7 +12,7 @@
 
 > Your coding agent is the architect. Delegator gives it executors. Verified patches, not model claims.
 
-A CLI your agent uses to hand bounded tasks to other models. Each run gets an isolated worktree,
+A CLI your agent uses to hand bounded tasks to other models. Each agentic run gets an isolated worktree,
 hard budgets, your build/tests, and a patch you apply or undo. Delegator dispatches and verifies;
 it never calls an LLM to decide.
 

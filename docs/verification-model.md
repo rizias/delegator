@@ -4,12 +4,12 @@ delegator runs your build/test commands itself, in the worker's worktree, and de
 from **facts** (did the patch extract, did verification pass, was the judge untouched) — never from the
 worker's own text. This page is the operational contract for that.
 
-## 1. One run per worker (today)
+## 1. Concurrency (per provider)
 
-Each worker runs **one active run at a time**. True parallelism (several at once) is a later step.
-Consequence: races over shared state (`state.json`, semaphore, breaker) cannot occur in this regime —
-but shared-state writes are still made **atomic immediately** (temp file + rename), which guards
-against a corrupted file.
+A provider runs **unbounded by default**; set `maxConcurrent: 1` on it to force one active run at a time
+(and `concurrencyGroup` to share a limit across providers; a model can also cap itself with
+`limits.concurrent`). Either way, shared-state writes (`state.json`, semaphore, breaker) are made
+**atomic immediately** (temp file + rename), so concurrent runs cannot corrupt them.
 
 ## 2. What "safe verification" means (the network is NOT cut)
 

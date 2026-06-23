@@ -19,7 +19,7 @@ Core invariants:
 - The core makes no LLM routing or planning decisions.
 - Every run is bounded by wall-clock time, stall detection, and silence detection.
 - Workers are untrusted: verification and apply decisions belong to the core and the Brain, not to worker self-report.
-- The common interface is CLI/MCP plus instruction packs for host agents.
+- The common interface is the CLI plus instruction packs for host agents.
 
 ---
 
@@ -166,8 +166,8 @@ provider/model concurrency, and breaker state. Local OpenAI-compatible providers
 QUEUED -> PREPARING -> RUNNING <-> CHECKPOINT -> COLLECTING -> VERIFYING -> DONE
 ```
 
-- `PREPARING`: resolve handle/fallback chain, create a git worktree, write the brief, render runtime
-  descriptor inputs.
+- `PREPARING`: resolve handle/fallback chain, create a git worktree (command runtimes only — a
+  direct-api run skips it), write the brief, render runtime descriptor inputs.
 - `RUNNING`: execute the command runtime or direct-api runtime, stream events, update heartbeat.
 - `CHECKPOINT`: enforce wall-clock budget, stall detection, silence detection, and
   process cleanup.
@@ -182,8 +182,9 @@ Terminal statuses include `completed`, `partial`, `requires-review`, `failed`, `
 
 ## 6. Isolation and verification
 
-Each run uses a separate git worktree created from the current `HEAD`. Workers see tracked files in
-that worktree and return a patch. `dlg apply` is the path back to the user's tree.
+Each command-runtime run uses a separate git worktree created from the current `HEAD`; workers see
+tracked files there and return a patch (`dlg apply` is the path back to the user's tree). A direct-api
+run is one HTTP call with no worktree or patch.
 
 Verification is core-owned. Project config may declare:
 
@@ -258,6 +259,4 @@ dlg clean <runId | --all | --worktrees>
 
 (plus key, restrict, skill, gain, queue, update — run `dlg --help` for the full set)
 ```
-
-MCP tools mirror the same operations for host agents that prefer tool calls over shell commands.
 
