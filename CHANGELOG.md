@@ -6,6 +6,8 @@ All notable changes to Delegator are documented here. This project adheres to
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-07-02
+
 ### Added
 - **`dlg council`** — fan ONE task out to several workers in parallel (`-w h1,h2,h3`) and gather every
   full answer, diff, per-worker tokens (incl. reasoning) and a ready aggregate-and-synthesize `bundle`.
