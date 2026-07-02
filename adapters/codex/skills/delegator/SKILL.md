@@ -2,7 +2,7 @@
 name: delegator
 description: Dispatch well-specified coding tasks to a separate-pool worker via the delegator CLI (dlg) instead of burning your own tokens. Use when the user says "delegator", "delegate this", "hand it to a worker", asks to save tokens on a mechanical or standard coding task, or a well-specified task needs no conversation context. Do not use for trivial one-off edits, tasks needing conversation context, or security-sensitive code.
 metadata:
-  delegator-skill-version: "2026-07-02T12:00:00Z"
+  delegator-skill-version: "2026-07-02T18:00:00Z"
 ---
 
 # delegator — for a Codex orchestrator
@@ -117,6 +117,9 @@ length). `--aggregate <model>` is for headless runs only; never interactively.
   through harnesses). `card.goodFor` is an optional hint; avoid weak members (they drag the aggregate down).
 - **No config.** Flags: `--budget` (per worker), `--min-proposers` (default 2). Fewer usable answers →
   `quorumMet: false`, `stopReason: degraded` (a single opinion, not a council) — report it honestly.
+- **`--cwd` = the code the council sees.** For a code review point it at the project root so each worker
+  reads the LIVE source (own worktree); a scratch dir with only a pasted brief = blind review. The brief
+  (`-f <file>`) is read by the orchestrator and can live anywhere. Plain `--cwd` only for code-free questions.
 - **Envelope:** each candidate has `runId`, full `answer`, `tokens` incl. reasoning (report per-worker +
   totals — always), `warnings`. Works without git.
 

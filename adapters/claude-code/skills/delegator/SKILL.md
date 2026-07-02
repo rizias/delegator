@@ -2,7 +2,7 @@
 name: delegator
 description: Dispatch well-specified coding tasks to a separate-pool worker via the delegator CLI (dlg) instead of burning your own tokens. Use when the user says "delegator", "delegate this", "hand it to a worker", asks to save tokens on a mechanical or standard coding task, or a well-specified task needs no conversation context. Do not use for trivial one-off edits, tasks needing conversation context, or security-sensitive code.
 metadata:
-  delegator-skill-version: "2026-07-02T12:00:00Z"
+  delegator-skill-version: "2026-07-02T18:00:00Z"
 ---
 
 # Delegator — dispatch work to a separate-pool worker
@@ -146,6 +146,11 @@ it interactively — a same-family aggregator is a redundant pass.
   result is a single model's opinion, not a council.
 - **On `quorumMet: false`:** report it honestly; you MAY offer to add your own independent take (solve the
   task cold yourself as one more voice) — only WITH the user's consent, never silently.
+- **Point `--cwd` at the CODE the council must SEE.** Each worker gets its OWN isolated worktree/copy of
+  `--cwd` — that is the only code they can read. To review or analyse a codebase, set `--cwd` to the
+  project root so they read the LIVE source; a scratch dir holding only a pasted brief makes them review
+  BLIND and guess. The brief (`-f <file>`) is read by the orchestrator and may live anywhere. A plain
+  `--cwd` is right only for a code-free question (pure design or research).
 - **Read the envelope:** every candidate carries `runId` (`dlg logs/result <id>` for its trace), full
   `answer`, `tokens` incl. reasoning (report per-worker + totals to the user — always), and `warnings`
   (failed workers, same-family pairs). Works in a plain folder without git.
