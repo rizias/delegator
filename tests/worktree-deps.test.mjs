@@ -15,7 +15,10 @@ const { createWorktree, removeWorktree } = await import('../dist/worktree.js');
 function git(cwd, ...args) { execFileSync('git', args, { cwd, stdio: 'pipe' }); }
 
 function makeRepo() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dlg-wt-deps-repo-'));
+  // realpathSync canonicalizes the temp path so it matches what `git worktree list` prints. On macOS
+  // os.tmpdir() is /var/... but /var is a symlink to /private/var, which git resolves — without this
+  // the deep-equal against git's output fails on macOS only. No-op on Linux/Windows.
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'dlg-wt-deps-repo-')));
   git(dir, 'init', '-q');
   git(dir, 'config', 'user.email', 'test@example.com');
   git(dir, 'config', 'user.name', 'test');
