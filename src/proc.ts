@@ -116,6 +116,12 @@ export function spawnStreaming(
   });
 
   if (spec.stdinData !== undefined && child.stdin) {
+    // Feeding the brief is best-effort. A worker that ignores stdin, reads only part of it, or exits
+    // early closes the read end while we are still writing — the async write then emits EPIPE on the
+    // stdin stream. With no handler Node escalates that to an uncaughtException and kills the run
+    // (races on macOS/Linux; Windows pipes mask it). Swallow it: a closed stdin is the worker's
+    // choice, not our failure — its real outcome is judged by exit code + output.
+    child.stdin.on('error', () => { /* EPIPE / ECONNRESET: worker closed stdin early — ignore */ });
     child.stdin.write(spec.stdinData);
     child.stdin.end();
   }
