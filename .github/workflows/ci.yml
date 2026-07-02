@@ -9,6 +9,9 @@ jobs:
   test:
     runs-on: ${{ matrix.os }}
     strategy:
+      # Run EVERY OS/node cell to completion — don't cancel siblings on the first failure. A
+      # platform-specific flake then surfaces the full picture in one run instead of one-per-push.
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
         node: ['20', '22']

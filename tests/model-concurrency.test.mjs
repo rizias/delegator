@@ -1,69 +1,54 @@
-// Per-model limits.concurrent gate (nested under the provider maxConcurrent gate).
-// Proves three things end-to-end through executeRun:
-//  (a) a model with limits.concurrent:1 serializes its OWN runs — a 2nd concurrent
-//      run of that model queues and is `rejected` on the queue timeout;
-//  (b) the provider-level maxConcurrent gate still works (unchanged);
-//  (c) a model with NO limits.concurrent is unbounded at the model level — it does
-//      NOT queue behind a different model's model-scoped slot.
+// Per-model / per-provider concurrency gate, proven end-to-end through executeRun.
+// Deterministic by construction: executeRun claims the provider + model slots BEFORE running the
+// worker, so an in-process worker that blocks inside execute() provably HOLDS its slot until the test
+// releases it. A contending run therefore always meets an occupied slot. No sleeps, no spawned worker,
+// no wall-clock — only the gate's terminal status + stop-reason are asserted, and the reason is anchored
+// on the exact queue-timeout wording so an unrelated rejection cannot pass. Each test uses its OWN
+// provider id, so the lock scopes never overlap even when node:test runs the tests in parallel.
+//
+// Scope of this file: the acquire / queue / timeout / reject / compose-release LOGIC, which spawned and
+// in-process workers share (the gate runs before the runtime branch). It does NOT cover spawn-only
+// concerns — stale-lock reaping after a holder process crashes, or the pid liveness check for a lock
+// owned by a DIFFERENT process — because every holder here shares this process's pid.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { execFileSync } from 'node:child_process';
 
 process.env.DELEGATOR_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'dlg-home-'));
 const { executeRun } = await import('../dist/runner.js');
 const { _assumeBinariesForTest } = await import('../dist/registry.js');
 _assumeBinariesForTest(['claude']);
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const BRIEF = '## Goal\nwrite out.txt\n## Definition of done\nout.txt exists\n';
+const T = { timeout: 10_000 }; // a broken gate must FAIL here, never hang the suite
+const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'dlg-conc-'));
+const deferred = () => { let resolve; const promise = new Promise((r) => { resolve = r; }); return { promise, resolve }; };
 
-function git(cwd, ...args) { execFileSync('git', args, { cwd, stdio: 'pipe' }); }
-function makeRepo() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dlg-repo-'));
-  git(dir, 'init', '-q');
-  git(dir, 'config', 'user.email', 't@e.com');
-  git(dir, 'config', 'user.name', 't');
-  git(dir, 'config', 'commit.gpgsign', 'false');
-  fs.writeFileSync(path.join(dir, 'seed.txt'), 'seed\n');
-  git(dir, 'add', '-A');
-  git(dir, 'commit', '-q', '-m', 'seed');
-  return dir;
-}
-
-// A spawn-runtime stub whose worker sleeps a duration chosen by MODEL, then exits 0.
-// Both runs share runtime 'claude'; the hold time branches on the model id so a
-// single stub serves several workers. The slot is held for the whole sleep (the
-// spawn path releases only after the process exits), which is exactly what we gate on.
-function sleepByModelStub(holds) {
-  const holdsJson = JSON.stringify(holds);
-  const script =
-    `const fs=require('node:fs');` +
-    `const holds=${holdsJson};` +
-    `const m=JSON.parse(process.env.DLG_TEST_MODEL||'"?"');` +
-    `const ms=holds[m]??0;` +
-    `setTimeout(()=>{fs.writeFileSync('out.txt','x');process.stdout.write('done\\n');process.exit(0);},ms);`;
+// An in-process runtime (has `execute`, so the runner takes the no-spawn path). A worker whose model is
+// in `gated` signals `entered` (its slot is now held) and blocks on `release`; any other model completes
+// at once. queueTimeoutSeconds is small, so a run that meets a held slot rejects promptly — the holder
+// stays put until the test releases it, so the rejection is guaranteed regardless of how slow the runner.
+function holdingRuntime(gated) {
   return {
-    id: 'sleep', binary: 'node',
-    buildSpawn: (ctx) => ({
-      command: 'node', args: ['-e', script],
-      env: { DLG_TEST_MODEL: JSON.stringify(ctx.resolved.worker.model ?? '?') },
-      cwd: ctx.worktree, stdinData: ctx.brief,
-    }),
-    parseLine: (line, stream) => ({ ts: Date.now(), stream, kind: 'output', raw: line }),
-    finalSummary: (tail) => tail || 'sleep',
-    finalUsage: () => ({}),
+    id: 'claude',
+    async execute(ctx) {
+      const g = gated[ctx.resolved.worker.model];
+      g?.entered.resolve();
+      if (g) await g.release.promise;
+      return { status: 'completed', summary: 'ok', stopReason: 'ok', errType: 'internal', failure: null };
+    },
   };
 }
 
-function cfg({ providerMax, workers }) {
+function cfg(providerId, { providerMax, workers }) {
   return {
     version: 1,
     defaults: {
       policy: 'review', budget: { wallClockMs: 60_000 },
       checkpointSeconds: 90, stallSeconds: 120, silenceKillSeconds: 300,
-      keepRuns: 50, queueTimeoutSeconds: 1, queuePollSeconds: 0.05,
+      keepRuns: 50, queueTimeoutSeconds: 0.2, queuePollSeconds: 0.02,
       autoApply: { maxFiles: 10, maxLines: 400 },
       retries: { rateLimit: 1, server: 1 },
       breaker: { failures: 99, cooldownMs: 600_000 },
@@ -71,109 +56,127 @@ function cfg({ providerMax, workers }) {
     },
     privacy: { sensitivePaths: [] },
     providers: {
-      anth: { kind: 'anthropic', auth: 'subscription', ...(providerMax !== undefined ? { maxConcurrent: providerMax } : {}) },
+      [providerId]: { kind: 'anthropic', auth: 'subscription', ...(providerMax !== undefined ? { maxConcurrent: providerMax } : {}) },
     },
     workers, tiers: {},
   };
 }
 
-const BRIEF = '## Goal\nwrite out.txt\n## Definition of done\nout.txt exists\n';
+const run = (c, runtimes, workerId, cwd) =>
+  executeRun({ workerId, brief: BRIEF, cwd, policy: 'review' }, c, runtimes);
 
-// (a) Model-level cap queues the extra run of the SAME model.
-test('limits.concurrent serializes runs of one model (2nd queues → rejected)', async () => {
-  const repo = makeRepo();
-  const runtimes = { claude: sleepByModelStub({ m1: 2000 }) };
-  const c = cfg({
-    workers: {
-      w1: { provider: 'anth', model: 'm1', runtime: 'claude', limits: { concurrent: 1 } },
-    },
-  });
+// Launch a worker and return { holder } once it PROVABLY holds its slot (execute() entered). The bare
+// promise is wrapped so `await launchHolder(...)` resolves on the race, not by chaining the still-pending
+// holder (which would deadlock). Both race branches RESOLVE — including the holder's REJECT arm — so no
+// orphaned promise can turn a later holder rejection into an unhandled rejection.
+async function launchHolder(c, runtimes, workerId, cwd, gate) {
+  const holder = run(c, runtimes, workerId, cwd);
+  const outcome = await Promise.race([
+    gate.entered.promise.then(() => 'held'),
+    holder.then((r) => `ended:${r.status}:${r.stopReason}`, (e) => `errored:${e?.message ?? e}`),
+  ]);
+  assert.equal(outcome, 'held', `holder ended before acquiring its slot (${outcome})`);
+  return { holder };
+}
 
-  const aP = executeRun({ workerId: 'w1', brief: BRIEF, cwd: repo, policy: 'review' }, c, runtimes);
-  await sleep(300); // let run A claim the model slot + spawn
-  const start = Date.now();
-  const b = await executeRun({ workerId: 'w1', brief: BRIEF, cwd: repo, policy: 'review' }, c, runtimes);
-  const bElapsed = Date.now() - start;
-  const a = await aP;
+// (a) A model cap serializes that model across DIFFERENT workers: a 2nd run on the SAME model (via a
+// different worker id) is rejected. Two workers prove the scope is the model, not the worker.
+test('limits.concurrent caps a model across workers (2nd run of that model is rejected)', T, async () => {
+  const cwd = tmp();
+  const gate = { entered: deferred(), release: deferred() };
+  const runtimes = { claude: holdingRuntime({ m1: gate }) };
+  const c = cfg('pa', { workers: {
+    w1: { provider: 'pa', model: 'm1', runtime: 'claude', limits: { concurrent: 1 } },
+    w2: { provider: 'pa', model: 'm1', runtime: 'claude', limits: { concurrent: 1 } },
+  } });
 
-  assert.equal(a.status, 'completed', a.stopReason);
-  assert.equal(b.status, 'rejected', `expected 2nd run to be rejected, got ${b.status}: ${b.stopReason}`);
-  // The rejection must come from the MODEL gate (distinct reason), not a provider timeout.
-  assert.match(b.stopReason, /model/, `model-scoped reason expected: ${b.stopReason}`);
-  assert.ok(bElapsed < 1900, `2nd run must queue-timeout well before the 1st finishes (took ${bElapsed}ms)`);
+  const { holder } = await launchHolder(c, runtimes, 'w1', cwd, gate);
+  const b = await run(c, runtimes, 'w2', cwd);
+  assert.equal(b.status, 'rejected', b.stopReason);
+  assert.match(b.stopReason, /queue timeout: model/i, b.stopReason);
+
+  gate.release.resolve();
+  assert.equal((await holder).status, 'completed');
+  // Normal completion must free the model slot too: a fresh run of the same model now succeeds.
+  assert.equal((await run(c, runtimes, 'w1', cwd)).status, 'completed');
 });
 
-// (b) Provider-level maxConcurrent gate is unchanged.
-test('provider maxConcurrent still gates across models', async () => {
-  const repo = makeRepo();
-  const runtimes = { claude: sleepByModelStub({ m1: 2000, m2: 2000 }) };
-  const c = cfg({
-    providerMax: 1,
-    workers: {
-      w1: { provider: 'anth', model: 'm1', runtime: 'claude' }, // no model limit
-      w2: { provider: 'anth', model: 'm2', runtime: 'claude' }, // no model limit
-    },
-  });
+// (b) The provider cap gates a 2nd run across DIFFERENT models with a provider-scope timeout.
+test('provider maxConcurrent gates a second run across different models', T, async () => {
+  const cwd = tmp();
+  const gate = { entered: deferred(), release: deferred() };
+  const runtimes = { claude: holdingRuntime({ m1: gate }) };
+  const c = cfg('pb', { providerMax: 1, workers: {
+    w1: { provider: 'pb', model: 'm1', runtime: 'claude' },
+    w2: { provider: 'pb', model: 'm2', runtime: 'claude' },
+  } });
 
-  const aP = executeRun({ workerId: 'w1', brief: BRIEF, cwd: repo, policy: 'review' }, c, runtimes);
-  await sleep(300); // let run A claim the provider slot
-  const b = await executeRun({ workerId: 'w2', brief: BRIEF, cwd: repo, policy: 'review' }, c, runtimes);
-  const a = await aP;
+  const { holder } = await launchHolder(c, runtimes, 'w1', cwd, gate);
+  const b = await run(c, runtimes, 'w2', cwd);
+  assert.equal(b.status, 'rejected', b.stopReason);
+  assert.match(b.stopReason, /queue timeout: scope/i, b.stopReason);   // provider scope, positively
+  assert.doesNotMatch(b.stopReason, /model/i, b.stopReason);
 
-  assert.equal(a.status, 'completed', a.stopReason);
-  assert.equal(b.status, 'rejected', `2nd run must queue-timeout at the PROVIDER gate: ${b.stopReason}`);
-  assert.doesNotMatch(b.stopReason, /model/, `must be a provider-scope timeout, not model: ${b.stopReason}`);
+  gate.release.resolve();
+  assert.equal((await holder).status, 'completed');
 });
 
-// (c) A model with no limits.concurrent is unbounded at the model level and does
-// NOT queue behind a different model's model-scoped slot.
-test('a model without limits.concurrent does not queue behind another model slot', async () => {
-  const repo = makeRepo();
-  // m1's hold and the assertion threshold are deliberately WIDE apart: test files run in
-  // parallel and sibling files (council-run) spawn real workers, so m2's own overhead can
-  // stretch well past its 300ms hold under load. Queuing behind m1 would cost >= ~6000ms,
-  // so < 4000ms still cleanly means "did not queue".
-  const runtimes = { claude: sleepByModelStub({ m1: 6000, m2: 300 }) };
-  const c = cfg({
-    workers: {
-      w1: { provider: 'anth', model: 'm1', runtime: 'claude', limits: { concurrent: 1 } }, // gated, slow
-      w2: { provider: 'anth', model: 'm2', runtime: 'claude' },                            // no model limit, fast
-    },
-  });
+// (c) A model with NO cap does not queue behind a different model's slot — it completes.
+test('a model without limits.concurrent does not queue behind another model slot', T, async () => {
+  const cwd = tmp();
+  const gate = { entered: deferred(), release: deferred() };
+  const runtimes = { claude: holdingRuntime({ m1: gate }) }; // m2 has no gate → completes at once
+  const c = cfg('pc', { workers: {
+    w1: { provider: 'pc', model: 'm1', runtime: 'claude', limits: { concurrent: 1 } },
+    w2: { provider: 'pc', model: 'm2', runtime: 'claude' },
+  } });
 
-  // Saturate m1's model slot with a slow run, then run m2 concurrently.
-  const aP = executeRun({ workerId: 'w1', brief: BRIEF, cwd: repo, policy: 'review' }, c, runtimes);
-  await sleep(300); // let m1 claim its slot + spawn
-  const start = Date.now();
-  const b = await executeRun({ workerId: 'w2', brief: BRIEF, cwd: repo, policy: 'review' }, c, runtimes);
-  const bElapsed = Date.now() - start;
-  await aP;
-
+  const { holder } = await launchHolder(c, runtimes, 'w1', cwd, gate);
+  const b = await run(c, runtimes, 'w2', cwd);
   assert.equal(b.status, 'completed', b.stopReason);
-  // m2 (300ms hold) must finish far inside m1's 6000ms hold → it did not wait on m1's slot.
-  assert.ok(bElapsed < 4000, `m2 must not queue behind m1 (took ${bElapsed}ms; m1 holds 6000ms)`);
+
+  gate.release.resolve();
+  assert.equal((await holder).status, 'completed');
 });
 
-// (d) limits.concurrent declared UNDER the model (providers.x.models.y.limits) with a
-// NAMED worker that has no own limits — the gate must STILL fire. This is the path the
-// named-worker config-load merge does not copy, so the runner reads the model's config
-// as a fallback. (Fails on a worker.limits-only reading; this locks in the fallback.)
-test('limits.concurrent under the model gates a named worker with no own limits', async () => {
-  const repo = makeRepo();
-  const runtimes = { claude: sleepByModelStub({ m1: 2000 }) };
-  const c = cfg({ workers: { w1: { provider: 'anth', model: 'm1', runtime: 'claude' } } });
-  // Cap on the MODEL config (not the worker), like examples/providers.example.yaml.
-  c.providers.anth.models = { m1: { limits: { concurrent: 1 } } };
+// (d) A cap declared under providers.x.models.y.limits (not on the worker) still gates a named worker.
+test('limits.concurrent under the model config gates a named worker with no own limit', T, async () => {
+  const cwd = tmp();
+  const gate = { entered: deferred(), release: deferred() };
+  const runtimes = { claude: holdingRuntime({ m1: gate }) };
+  const c = cfg('pd', { workers: { w1: { provider: 'pd', model: 'm1', runtime: 'claude' } } });
+  c.providers.pd.models = { m1: { limits: { concurrent: 1 } } };
 
-  const aP = executeRun({ workerId: 'w1', brief: BRIEF, cwd: repo, policy: 'review' }, c, runtimes);
-  await sleep(300);
-  const start = Date.now();
-  const b = await executeRun({ workerId: 'w1', brief: BRIEF, cwd: repo, policy: 'review' }, c, runtimes);
-  const bElapsed = Date.now() - start;
-  const a = await aP;
+  const { holder } = await launchHolder(c, runtimes, 'w1', cwd, gate);
+  const b = await run(c, runtimes, 'w1', cwd);
+  assert.equal(b.status, 'rejected', b.stopReason);
+  assert.match(b.stopReason, /queue timeout: model/i, b.stopReason);
 
-  assert.equal(a.status, 'completed', a.stopReason);
-  assert.equal(b.status, 'rejected', `model-config cap must gate the named worker: ${b.stopReason}`);
-  assert.match(b.stopReason, /model/, `model-scoped reason expected: ${b.stopReason}`);
-  assert.ok(bElapsed < 1900, `2nd run must queue-timeout before the 1st finishes (took ${bElapsed}ms)`);
+  gate.release.resolve();
+  assert.equal((await holder).status, 'completed');
+});
+
+// (e) A model-slot timeout must RELEASE the provider slot the run briefly held (no leak). Provider has
+// room for 2; model m1 is capped at 1. A 2nd m1 run takes a provider slot, then times out on the model
+// slot — and must free that provider slot, proven by a different-model run still fitting under the cap.
+test('a model-slot timeout releases the provider slot it briefly held', T, async () => {
+  const cwd = tmp();
+  const gate = { entered: deferred(), release: deferred() };
+  const runtimes = { claude: holdingRuntime({ m1: gate }) };
+  const c = cfg('pe', { providerMax: 2, workers: {
+    w1:  { provider: 'pe', model: 'm1', runtime: 'claude', limits: { concurrent: 1 } },
+    w1b: { provider: 'pe', model: 'm1', runtime: 'claude', limits: { concurrent: 1 } },
+    w2:  { provider: 'pe', model: 'm2', runtime: 'claude' },
+  } });
+
+  const { holder } = await launchHolder(c, runtimes, 'w1', cwd, gate);
+  const contended = await run(c, runtimes, 'w1b', cwd); // takes provider slot 2, times out on m1
+  assert.equal(contended.status, 'rejected', contended.stopReason);
+  assert.match(contended.stopReason, /queue timeout: model/i, contended.stopReason);
+  // If w1b had leaked its provider slot the provider would be full (2/2) and this would time out too.
+  const other = await run(c, runtimes, 'w2', cwd);
+  assert.equal(other.status, 'completed', other.stopReason);
+
+  gate.release.resolve();
+  assert.equal((await holder).status, 'completed');
 });
