@@ -15,10 +15,7 @@ const { createWorktree, removeWorktree } = await import('../dist/worktree.js');
 function git(cwd, ...args) { execFileSync('git', args, { cwd, stdio: 'pipe' }); }
 
 function makeRepo() {
-  // realpathSync canonicalizes the temp path so it matches what `git worktree list` prints. On macOS
-  // os.tmpdir() is /var/... but /var is a symlink to /private/var, which git resolves — without this
-  // the deep-equal against git's output fails on macOS only. No-op on Linux/Windows.
-  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'dlg-wt-deps-repo-')));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dlg-wt-deps-repo-'));
   git(dir, 'init', '-q');
   git(dir, 'config', 'user.email', 'test@example.com');
   git(dir, 'config', 'user.name', 'test');
@@ -79,7 +76,12 @@ test('parallel worktree add/remove leaves only the main tree registered', async 
     .split(/\r?\n/)
     .filter((line) => line.startsWith('worktree '))
     .map((line) => line.replace(/\\/g, '/'));
-  assert.deepEqual(worktrees, [`worktree ${repo.replace(/\\/g, '/')}`]);
+  // Assert the INVARIANT, not the path string: only the main worktree remains and every parallel one
+  // was removed. Comparing against the repo path is unreliable across OSes — git canonicalizes its
+  // output (macOS /var -> /private/var symlink; Windows 8.3 RUNNER~1 -> runneradmin) while os.tmpdir()
+  // does not, so a string deep-equal fails on the CI runners even when the behavior is correct.
+  assert.equal(worktrees.length, 1, `only the main worktree should remain, got: ${worktrees.join(', ')}`);
+  assert.ok(!worktrees.some((w) => w.includes('dlg_parallel_')), 'no parallel worktree left registered');
   const adminDir = path.join(repo, '.git', 'worktrees');
   assert.equal(fs.existsSync(adminDir) ? fs.readdirSync(adminDir).length : 0, 0);
 });
