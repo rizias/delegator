@@ -52,6 +52,24 @@ Open Claude Code, Codex, and OpenCode in the same repo simultaneously — all th
 
 So "I want each of them to use delegator" = install each host's adapter once (or just rely on the bare CLI). No per-host servers, no coordination.
 
+## Council: one task, several models
+
+For open-ended questions with no test to prove the answer (design calls, reviews, analysis), fan one
+task out to several workers in parallel and let the calling agent synthesize the final answer:
+
+```shell
+dlg council -w openai-codex/gpt-5.5,zai/glm-5.2,opencode/opencode/deepseek-v4-flash-free \
+  -m "Which retry strategy fits an unattended CLI?" --budget 10m --json
+```
+
+The envelope carries every worker's FULL answer, diff (if it wrote files), per-worker tokens
+(including reasoning tokens) and its own run id, plus a ready synthesis prompt (`bundle`). The
+command never picks a winner — the orchestrating agent (or you) reads the candidates and writes the
+final. There is no council config: the model list is an argument, chosen per task. Fewer usable
+answers than `--min-proposers` (default 2) marks the result `quorumMet: false` — one surviving
+answer is a single model's opinion, and it is labeled as such. A plain folder without git works;
+headless callers can add `--aggregate <model>` to have one more worker synthesize a `final`.
+
 ## Restricting a project to specific models
 
 Drop a `.delegator.yaml` in the repo root (config-first; or run `dlg restrict`):

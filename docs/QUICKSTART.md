@@ -133,6 +133,19 @@ dlg apply  <runId>      # apply the reviewed patch to your tree
 dlg undo   <runId>      # roll an applied run back
 ```
 
+## Ask several models at once (council)
+
+For an open-ended question with no single right answer — a design decision, a review — fan it out to a
+few DIFFERENT models in parallel and let them cross-check:
+
+```bash
+dlg council -w codex/gpt-5.5,zai/glm-5.2,opencode/opencode/deepseek -m "Which retry strategy fits an unattended CLI?" --budget 10m
+```
+
+You get every model's full answer plus a synthesis `bundle` to combine them yourself (a headless caller
+can add `--aggregate <model>` for a ready `final`). Best for design/review/analysis — not for short-form
+writing. See [USAGE.md](USAGE.md) for the full envelope.
+
 ## Let a host agent delegate (or drive `dlg` yourself)
 
 Everything above you can run by hand in a terminal. To let a host **agent** (Claude Code, Codex)

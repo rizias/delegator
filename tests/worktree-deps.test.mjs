@@ -62,3 +62,21 @@ test('a RELATIVE repo path (dlg run --cwd .) still links the real node_modules, 
     process.chdir(prev);
   }
 });
+
+test('parallel worktree add/remove leaves only the main tree registered', async () => {
+  const repo = makeRepo();
+  const created = await Promise.all(
+    Array.from({ length: 4 }, (_, i) => Promise.resolve().then(() => createWorktree(repo, `dlg_parallel_${i}`))),
+  );
+
+  await Promise.all(created.map(({ dir }) => Promise.resolve().then(() => removeWorktree(repo, dir))));
+
+  const list = execFileSync('git', ['worktree', 'list', '--porcelain'], { cwd: repo, encoding: 'utf8' });
+  const worktrees = list
+    .split(/\r?\n/)
+    .filter((line) => line.startsWith('worktree '))
+    .map((line) => line.replace(/\\/g, '/'));
+  assert.deepEqual(worktrees, [`worktree ${repo.replace(/\\/g, '/')}`]);
+  const adminDir = path.join(repo, '.git', 'worktrees');
+  assert.equal(fs.existsSync(adminDir) ? fs.readdirSync(adminDir).length : 0, 0);
+});

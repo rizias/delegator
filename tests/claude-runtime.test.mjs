@@ -53,6 +53,56 @@ test('long final message survives the 4000-char raw truncation (summary not lost
   assert.ok(summary.length > 1500, 'more than the old 1500-char clip survives');
 });
 
+test('finalSummary returns the result field from a truncated result event (no assistant fallback)', () => {
+  // The `result` line carries the authoritative final answer in its `result` field. For a long
+  // answer the stored raw is truncated to 4000 chars -> invalid JSON, so re-parsing raw threw and
+  // the real answer was silently dropped in favour of the fallback. The fix captures the result
+  // text at parse time from the FULL line (mirrors the token capture in parseLine).
+  const answer = 'FINAL ANSWER: ' + 'y'.repeat(6000);
+  const resultLine = JSON.stringify({ type: 'result', num_turns: 3, result: answer, usage: { input_tokens: 1, output_tokens: 1 } });
+  assert.ok(resultLine.length > 4000, 'precondition: the result line exceeds the 4000-char truncation');
+
+  const ev = claudeRuntime.parseLine(resultLine, 'stdout');
+  assert.ok(ev.raw.length <= 4000, 'raw is truncated for the log (would be invalid JSON)');
+
+  // Only the result event is present — there is NO assistant turn to fall back to. If finalSummary
+  // re-parsed raw it would throw and return the (empty) stdout tail instead of the real answer.
+  const summary = claudeRuntime.finalSummary('', [ev]);
+  assert.equal(summary, answer, 'the exact result field is returned, not the fallback');
+});
+
+test('finalSummary reports the claude stop diagnostic from a truncated error result event', () => {
+  // Error result lines can also exceed 4000 chars. is_error/subtype/errors must survive the raw
+  // truncation too — otherwise a long-running run that hits an error loses its diagnosis.
+  const resultLine = JSON.stringify({
+    type: 'result', is_error: true, subtype: 'error_max_turns', errors: ['boom'],
+    session_id: 'z'.repeat(6000), // filler so the line exceeds the 4000-char truncation
+  });
+  assert.ok(resultLine.length > 4000, 'precondition: the error result line exceeds the truncation');
+
+  const ev = claudeRuntime.parseLine(resultLine, 'stdout');
+  assert.ok(ev.raw.length <= 4000, 'raw is truncated for the log');
+
+  const summary = claudeRuntime.finalSummary('', [ev]);
+  assert.match(summary, /^claude stopped: error_max_turns/, 'stop diagnostic built from captured fields, not re-parsed raw');
+  assert.match(summary, /boom/, 'the errors detail survives truncation');
+});
+
+test('finalUsage reads captured tokens/iterations from a truncated result event (not re-parsed raw)', () => {
+  // Same latent bug as finalSummary: finalUsage re-parsed the truncated raw for usage + num_turns.
+  // On a long answer that JSON.parse throws and both token usage AND the iteration count are lost.
+  const answer = 'x'.repeat(6000);
+  const resultLine = JSON.stringify({ type: 'result', num_turns: 2, result: answer, usage: { input_tokens: 10, output_tokens: 5 } });
+  assert.ok(resultLine.length > 4000, 'precondition: the result line exceeds the 4000-char truncation');
+
+  const ev = claudeRuntime.parseLine(resultLine, 'stdout');
+  assert.ok(ev.raw.length <= 4000, 'raw is truncated for the log (would be invalid JSON)');
+
+  const usage = claudeRuntime.finalUsage([ev]);
+  assert.equal(usage.tokens?.total, 15, 'token usage survives the truncation');
+  assert.equal(usage.iterations, 2, 'num_turns survives the truncation');
+});
+
 function ctxFor(kind, model) {
   return {
     brief: 'b', worktree: 'wt',

@@ -136,6 +136,26 @@ dlg run -w api/openai/gpt-5.5 -f brief.md --effort high
 dlg compare-runs <id1> <id2>
 ```
 
+## Ask several models at once (council)
+
+For open-ended questions with no test to prove the answer — design decisions, reviews, analysis —
+one model's blind spots matter. `dlg council` fans a single task out to several workers **in
+parallel** and returns every full answer plus a ready synthesis prompt (the `bundle`). It does
+**not** pick a winner: the agent (or you) reads the candidates and synthesizes the final answer.
+
+```shell
+dlg council -w codex/gpt-5.5,zai/glm-5.2,opencode/opencode/deepseek -m "Which retry strategy fits an unattended CLI?" --budget 10m
+```
+
+- Models are passed per invocation — there is no council config. Different tasks, different line-ups.
+- Every candidate reports its full answer, diff (if it wrote files), tokens (incl. reasoning) and
+  its own run id for `dlg logs`/`dlg result`.
+- Fewer usable answers than `--min-proposers` (default 2)? The envelope says `quorumMet: false` —
+  the result is one model's opinion, not a council, and it is labeled as such.
+- Works in a plain folder without git (workers get an isolated workspace copy).
+- `--aggregate <model>` (headless only) runs one more worker over the bundle and attaches its
+  synthesis as `final`; interactive agents synthesize themselves instead.
+
 ## Security model
 
 Delegator assumes workers are useful but not fully trusted.

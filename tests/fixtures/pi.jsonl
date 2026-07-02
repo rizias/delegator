@@ -1,0 +1,2 @@
+{"type":"turn_start"}
+{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"2"}],"api":"openai-codex-responses","provider":"openai-codex","model":"gpt-5.5","usage":{"input":5353,"output":339,"cacheRead":0,"cacheWrite":0,"totalTokens":5692,"cost":{"input":0.026765,"output":0.01017,"cacheRead":0,"cacheWrite":0,"total":0.036935}},"stopReason":"stop","responseId":"REDACTED"}}

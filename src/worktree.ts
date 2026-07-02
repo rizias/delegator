@@ -30,6 +30,11 @@ function runGitNoIndex(args: string[], cwd: string): string {
   return result.stdout ?? '';
 }
 
+// Concurrency note for `git worktree` ADMIN commands (add/remove/prune) under council fan-out:
+// `runGit` is execFileSync — fully synchronous — so two in-process callers can never interleave
+// one of these commands; cross-process safety rests on git's own .git/worktrees locking. A JS-level
+// mutex here would be dead code (a Promise chain cannot gate a synchronous section anyway).
+
 export function assertGitRepo(cwd: string): void {
   try {
     runGit(['rev-parse', '--is-inside-work-tree'], cwd);
@@ -154,7 +159,7 @@ export function removeWorktree(repo: string, dir: string): void {
   try {
     runGit(['worktree', 'remove', '--force', dir], repo);
   } catch {
-    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     try {
       runGit(['worktree', 'prune'], repo);
     } catch {
@@ -306,9 +311,12 @@ export function workspaceDiffHash(pristine: string, workspace: string): string {
   }
 }
 
+// maxRetries/retryDelay: Node retries rmSync on Windows EBUSY/EPERM/ENOTEMPTY (an AV, indexer,
+// or a just-exited worker briefly holding a handle on the temp dir) before giving up — this
+// clears most transient locks. A persistent lock still throws; callers treat that as non-fatal.
 export function removeWorkspace(pristine: string, workspace: string): void {
-  fs.rmSync(workspace, { recursive: true, force: true });
-  fs.rmSync(pristine, { recursive: true, force: true });
+  fs.rmSync(workspace, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  fs.rmSync(pristine, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 }
 
 export function applyPatch(repo: string, patchFile: string): void {

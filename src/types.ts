@@ -279,6 +279,18 @@ export interface WorkerEvent {
    *  file_change would otherwise re-parse to [] and FALSELY report the run as confined. */
   filePaths?: string[];
   tokens?: TokenUsage;
+  /** The `result` field of a claude `result` line — the authoritative final answer — captured
+   *  from the FULL line at parse time. `raw` is truncated for the log, so the summary reads this
+   *  instead of re-parsing a clipped line and silently dropping a long final answer. */
+  resultText?: string;
+  /** Error diagnostics from a claude `result` line (`is_error`/`subtype`/`errors`), captured from
+   *  the FULL line. Same reason as resultText: on a truncated raw, re-parsing loses the diagnosis. */
+  isError?: boolean;
+  subtype?: string;
+  errors?: string[];
+  /** Iteration/turn count reported inline on a terminal event (claude's `num_turns`), captured from
+   *  the FULL line so finalUsage need not re-parse a truncated raw and lose the count. */
+  iterations?: number;
 }
 
 export interface TokenUsage {
@@ -286,6 +298,60 @@ export interface TokenUsage {
   output?: number;
   reasoning?: number;
   total?: number;
+}
+
+export interface CouncilModelRef {
+  handle: string;
+  reasoningEffort?: string;
+}
+
+/** Per-invocation council options. There is NO council config file: the caller (normally the
+ *  orchestrator) picks the models for THIS task from the one shared provider pool
+ *  (providers.yaml, using each model's card.goodFor), and passes them here. */
+export interface CouncilOptions {
+  models: CouncilModelRef[];   // >= 2 different models, handles from the shared provider pool
+  budget?: string;             // wall-clock per worker, same format as `dlg run --budget`
+  minProposers: number;        // quorum: fewer completed answers -> quorumMet=false, degraded
+  maxRetriesPerWorker: number; // retries on the SAME model only; never substitutes another model
+}
+
+export interface CouncilCandidate {
+  workerId: string;
+  /** Underlying dlg run id — provenance for `dlg logs/result <id>`. Absent when the worker never produced an envelope. */
+  runId?: string;
+  status: TerminalStatus;
+  answer: string;
+  diff?: string;
+  filesTouched: string[];
+  tokens?: TokenUsage;
+  reasoningUnavailable?: boolean;
+  attempts: number;
+  durationMs: number;
+}
+
+export interface CouncilEnvelope {
+  kind: 'council';
+  councilId: string;
+  candidates: CouncilCandidate[];
+  bundle: string;
+  /** headless --aggregate only */
+  final?: {
+    answer: string;
+    workerId: string;
+    tokens?: TokenUsage;
+  };
+  usage: {
+    inputTokens: number;
+    outputTokens: number;
+    reasoningTokens: number;
+    totalTokens: number;
+    calls: number;
+    wallClockMs: number;
+  };
+  lowSignal: boolean;
+  quorumMet: boolean;
+  stopReason: 'completed' | 'degraded';
+  warnings: string[];
 }
 
 export type CmdStatus = 'passed' | 'failed' | 'skipped';
@@ -448,4 +514,3 @@ export interface InProcessRuntime {
 
 /** Any runtime the runner can dispatch: a spawn-based adapter OR an in-process one. */
 export type AnyRuntime = WorkerRuntimeAdapter | InProcessRuntime;
-

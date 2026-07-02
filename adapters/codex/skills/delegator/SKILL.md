@@ -2,7 +2,7 @@
 name: delegator
 description: Dispatch well-specified coding tasks to a separate-pool worker via the delegator CLI (dlg) instead of burning your own tokens. Use when the user says "delegator", "delegate this", "hand it to a worker", asks to save tokens on a mechanical or standard coding task, or a well-specified task needs no conversation context. Do not use for trivial one-off edits, tasks needing conversation context, or security-sensitive code.
 metadata:
-  delegator-skill-version: "2026-06-23T06:51:25Z"
+  delegator-skill-version: "2026-07-02T12:00:00Z"
 ---
 
 # delegator — for a Codex orchestrator
@@ -97,10 +97,28 @@ dlg models <provider>                  # live model list (fetched, never hardcod
 dlg route -w <handle>                  # resolved fallback chain + availability
 dlg plan -w <handle> [-f brief.md]     # dry run: chain, context-fit — NO tokens spent
 dlg run -w <handle> [-f brief.md | --task "..."] [--effort ..] [--budget 10m] [--policy review] [--json]
+dlg council -w <h1>,<h2>,<h3> [-f brief.md | -m "task"] [--budget 10m] [--min-proposers 2] [--aggregate <model>]
 dlg status [id] · dlg logs <id> --tail 20 · dlg result <id> --json
 dlg apply <id> · dlg undo <id>         # apply a reviewed patch / roll it back (the only write paths)
 dlg doctor · dlg gain --history        # diagnose env · per-run savings report
 ```
+
+## Council — one task across several models
+
+`dlg council -w <h1,h2,h3> -m "<task>"` fans ONE task to several workers **in parallel** (each a plain
+`dlg run`: review policy, own sandbox, per-worker `--budget`) and returns every worker's full answer +
+diff + tokens plus an aggregate-and-synthesize `bundle`. **No final answer is produced — YOU aggregate:**
+read `candidates` + `bundle` and synthesize yourself (evaluate critically, drop weak parts, don't reward
+length). `--aggregate <model>` is for headless runs only; never interactively.
+
+- **When:** open-ended tasks with no oracle (design, review, analysis, research). NOT mechanical coding
+  (one worker), NOT short-form writing (synthesis bloats tight prose). ~4x pool tokens vs one model.
+- **Models:** 2–4 DIFFERENT strong families, per task (diversity = different families; no temperature
+  through harnesses). `card.goodFor` is an optional hint; avoid weak members (they drag the aggregate down).
+- **No config.** Flags: `--budget` (per worker), `--min-proposers` (default 2). Fewer usable answers →
+  `quorumMet: false`, `stopReason: degraded` (a single opinion, not a council) — report it honestly.
+- **Envelope:** each candidate has `runId`, full `answer`, `tokens` incl. reasoning (report per-worker +
+  totals — always), `warnings`. Works without git.
 
 ## Budget choice and recovery
 

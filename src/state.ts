@@ -55,6 +55,7 @@ export function writeState(s: DelegatorState): void {
  * the FULL file, so the breaker never clobbers the key cursor (and vice-versa).
  */
 export function mutateState<T>(fn: (s: DelegatorState) => T): T {
+  // In-process atomic: fully synchronous read/modify/write; cross-process races are pre-existing.
   const s = readState();
   const r = fn(s);
   writeState(s);

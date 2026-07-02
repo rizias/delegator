@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { spawn, spawnSync } from 'node:child_process';
 import { Command } from 'commander';
 import { stringify as stringifyYaml } from 'yaml';
-import type { Envelope, Policy, ReasoningEffort } from './types.js';
+import type { CouncilEnvelope, CouncilModelRef, Envelope, Policy, ReasoningEffort } from './types.js';
 import { globalConfigPath, runsJournalPath, tailOf, updateCheckPath, dirSizeBytes } from './paths.js';
 import { ConfigError, loadConfig, loadSecretPools, parseDuration, saveSecret } from './config.js';
 import { listWorkers, resolveRunPlan, buildPlanView, type PlanView } from './registry.js';
@@ -18,6 +18,7 @@ import { initConfigHome, initProject } from './scaffold.js';
 import { resolveBinary, killTree } from './proc.js';
 import { scopeOccupancy } from './semaphore.js';
 import { executeRun, applyRun, undoRun } from './runner.js';
+import { runCouncil } from './council.js';
 import { removeWorktree, pruneWorktreeAdmin } from './worktree.js';
 import * as store from './runstore.js';
 
@@ -168,6 +169,16 @@ function parseToolsList(value: string | undefined): string[] | undefined {
   return value.split(',').map((s) => s.trim()).filter(Boolean);
 }
 
+function parseCouncilWorkers(value: string | undefined): CouncilModelRef[] {
+  if (value === undefined) throw new ConfigError('council needs at least 2 different models — pass -w <h1,h2,...>');
+  return value.split(',').map((s) => s.trim()).filter(Boolean).map((handle) => ({ handle }));
+}
+
+function parseNonNegativeInt(value: string, name: string): number {
+  if (!/^\d+$/.test(value)) throw new ConfigError(`${name} must be a non-negative integer`);
+  return Number(value);
+}
+
 function printEnvelope(env: Envelope): void {
   const t = env.usage.tokens?.total ? `, tokens ${formatTokens(env.usage.tokens.total, env.usage.tokens.reasoning)}` : '';
   const it = env.usage.iterations ? `, iterations ${env.usage.iterations}` : '';
@@ -183,6 +194,20 @@ function printEnvelope(env: Envelope): void {
   console.log('summary:');
   console.log(env.summary.split('\n').map((l) => '  ' + l).join('\n'));
   if (env.changes.patchFile && !env.changes.applied) console.log(`next: dlg apply ${env.runId}`);
+}
+
+function tokenLine(tokens: CouncilEnvelope['candidates'][number]['tokens']): string {
+  return `tok ${tokens?.input ?? 0}/${tokens?.output ?? 0}/${tokens?.reasoning ?? 0}/${tokens?.total ?? 0}`;
+}
+
+function printCouncilEnvelope(env: CouncilEnvelope): void {
+  console.log(`council ${env.councilId} — ${env.stopReason} (${env.candidates.length} workers, quorum ${env.quorumMet ? 'met' : 'not met'})`);
+  for (const c of env.candidates) {
+    console.log(`${c.workerId}  ${c.status}  ${c.durationMs}ms  ${tokenLine(c.tokens)}`);
+  }
+  console.log(`totals: calls ${env.usage.calls}, tok ${env.usage.inputTokens}/${env.usage.outputTokens}/${env.usage.reasoningTokens}/${env.usage.totalTokens}, ${env.usage.wallClockMs}ms`);
+  for (const w of env.warnings) console.log(`warning: ${w}`);
+  console.log(env.bundle);
 }
 
 defineCommand('init')
@@ -501,6 +526,42 @@ defineCommand('run')
       //   1 internal CLI error
       const code = env.status === 'completed' ? 0 : env.status === 'rejected' ? 3 : 4;
       process.exit(code);
+    } catch (e) { fail(e); }
+  });
+
+defineCommand('council')
+  .description('run the same task across several workers and print candidate bundle')
+  .option('-w, --worker <ids>', 'comma-separated worker ids')
+  .option('-f, --brief-file <path>', 'brief file (markdown)')
+  .option('-m, --message <text>', 'inline task/brief text')
+  .option('--cwd <dir>', 'project root', process.cwd())
+  .option('--budget <duration>', 'wall-clock budget per worker, e.g. 10m')
+  .option('--min-proposers <n>', 'minimum usable answers for quorum', '2')
+  .option('--max-retries <n>', 'retries per worker', '0')
+  .option('--aggregate <model>', 'run one final model over the bundle')
+  .action(async (opts: {
+    worker?: string; briefFile?: string; message?: string; cwd: string; budget?: string;
+    minProposers: string; maxRetries: string; aggregate?: string; json?: boolean;
+  }) => {
+    try {
+      store.setRunsProject(opts.cwd);
+      const cfg = loadConfig(opts.cwd);
+      let brief = opts.message ?? '';
+      if (opts.briefFile) brief = fs.readFileSync(opts.briefFile, 'utf8');
+      if (!brief.trim()) throw new ConfigError('no task: pass -f <file> or -m "<text>"');
+      const env = await runCouncil({
+        task: brief,
+        cwd: opts.cwd,
+        options: {
+          models: parseCouncilWorkers(opts.worker),
+          ...(opts.budget ? { budget: opts.budget } : {}),
+          minProposers: parseNonNegativeInt(opts.minProposers, '--min-proposers'),
+          maxRetriesPerWorker: parseNonNegativeInt(opts.maxRetries, '--max-retries'),
+        },
+        ...(opts.aggregate ? { aggregateWith: opts.aggregate } : {}),
+      }, cfg);
+      emit(env, () => printCouncilEnvelope(env), opts.json);
+      process.exit(0);
     } catch (e) { fail(e); }
   });
 

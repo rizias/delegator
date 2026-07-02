@@ -28,7 +28,7 @@ function makeRepo() {
   return dir;
 }
 
-function baseConfig() {
+function baseConfig(keepRuns = 50) {
   const script = "require('node:fs').writeFileSync('zero-code.txt','ok\\n');process.stdout.write('zero-code runtime completed\\n');";
   return {
     version: 1,
@@ -36,7 +36,7 @@ function baseConfig() {
       policy: 'review',
       budget: { wallClockMs: 30_000 },
       checkpointSeconds: 90, stallSeconds: 120, silenceKillSeconds: 300,
-      keepRuns: 50, queueTimeoutSeconds: 5, queuePollSeconds: 1,
+      keepRuns, queueTimeoutSeconds: 5, queuePollSeconds: 1,
       autoApply: { maxFiles: 10, maxLines: 400 },
       retries: { rateLimit: 0, server: 0 },
       breaker: { failures: 3, cooldownMs: 600_000 },
@@ -73,4 +73,35 @@ test('executeRun: config-declared shell runtime runs with zero adapter code', as
   assert.equal(env.runtime, 'echo-lines');
   assert.ok(env.changes.filesTouched.includes('zero-code.txt'));
   assert.equal(env.summary, 'zero-code runtime completed');
+});
+
+test('executeRun: skipPrune lets fan-out callers gather sibling results before retention', async () => {
+  {
+    const repo = makeRepo();
+    const first = await executeRun(
+      { workerId: 'echoer', brief: 'write one file', cwd: repo, policy: 'review' },
+      baseConfig(1),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await executeRun(
+      { workerId: 'echoer', brief: 'write one file', cwd: repo, policy: 'review' },
+      baseConfig(1),
+    );
+    assert.equal(fs.existsSync(path.dirname(first.logsPath)), false, 'older done run is pruned normally');
+  }
+
+  {
+    const repo = makeRepo();
+    const first = await executeRun(
+      { workerId: 'echoer', brief: 'write one file', cwd: repo, policy: 'review', skipPrune: true },
+      baseConfig(1),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const second = await executeRun(
+      { workerId: 'echoer', brief: 'write one file', cwd: repo, policy: 'review', skipPrune: true },
+      baseConfig(1),
+    );
+    assert.equal(fs.existsSync(path.dirname(first.logsPath)), true, 'first sibling survives deferred prune');
+    assert.equal(fs.existsSync(path.dirname(second.logsPath)), true, 'second sibling survives deferred prune');
+  }
 });

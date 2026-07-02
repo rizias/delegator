@@ -31,6 +31,9 @@ test('codex descriptor renders exec --json, sandbox, model, effort, and stdin ma
     '--json',
     '--sandbox',
     'workspace-write',
+    // delegator-created sandbox dirs are trusted by construction; the workspace copy
+    // (no-git fallback) is not a git repo, and codex refuses it without this flag.
+    '--skip-git-repo-check',
     '-m',
     'gpt-5.5',
     '-c',

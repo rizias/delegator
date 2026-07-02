@@ -53,7 +53,22 @@ export const claudeStreamJsonParser: ParserPreset = {
             };
           }
         }
-        return { ts: Date.now(), stream, kind: 'result', raw, tokens };
+        // Capture the final answer and error diagnostics from the FULL line now — `raw` is
+        // truncated for the log, so finalSummary must not re-parse it (see finalSummary/tokens).
+        const rawResult = obj['result'];
+        const resultText = typeof rawResult === 'string' ? rawResult : undefined;
+        const isError = obj['is_error'] === true ? true : undefined;
+        const subtype = typeof obj['subtype'] === 'string' ? obj['subtype'] : undefined;
+        const errors = Array.isArray(obj['errors']) ? (obj['errors'] as unknown[]).map(String) : undefined;
+        const numTurns = typeof obj['num_turns'] === 'number' ? obj['num_turns'] : undefined;
+        return {
+          ts: Date.now(), stream, kind: 'result', raw, tokens,
+          ...(resultText !== undefined ? { resultText } : {}),
+          ...(isError !== undefined ? { isError } : {}),
+          ...(subtype !== undefined ? { subtype } : {}),
+          ...(errors !== undefined ? { errors } : {}),
+          ...(numTurns !== undefined ? { iterations: numTurns } : {}),
+        };
       }
 
       if (type === 'system' || type === 'user') {
@@ -66,22 +81,16 @@ export const claudeStreamJsonParser: ParserPreset = {
 
   finalSummary(stdoutTail: string, events: WorkerEvent[]): string {
     for (let i = events.length - 1; i >= 0; i--) {
-      if (events[i]!.kind === 'result') {
-        try {
-          const parsed = JSON.parse(events[i]!.raw) as unknown;
-          if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
-            const obj = parsed as Record<string, unknown>;
-            const r = obj['result'];
-            if (typeof r === 'string' && r.trim() !== '') return r;
-            if (obj['is_error'] === true) {
-              const subtype = typeof obj['subtype'] === 'string' ? obj['subtype'] : 'error';
-              const errs = Array.isArray(obj['errors']) ? (obj['errors'] as unknown[]).map(String).join('; ') : '';
-              const lastText = lastAssistantText(events);
-              return `claude stopped: ${subtype}${errs ? ` (${errs})` : ''}${lastText ? `\nlast assistant message:\n${lastText}` : ''}`;
-            }
-          }
-        } catch {
-          // fall through to fallback
+      const ev = events[i]!;
+      if (ev.kind === 'result') {
+        // Read the fields captured at parse time from the FULL line — never re-parse `ev.raw`,
+        // which is truncated to 4000 chars and is invalid JSON for a long answer.
+        if (typeof ev.resultText === 'string' && ev.resultText.trim() !== '') return ev.resultText;
+        if (ev.isError === true) {
+          const subtype = ev.subtype ?? 'error';
+          const errs = ev.errors && ev.errors.length ? ev.errors.join('; ') : '';
+          const lastText = lastAssistantText(events);
+          return `claude stopped: ${subtype}${errs ? ` (${errs})` : ''}${lastText ? `\nlast assistant message:\n${lastText}` : ''}`;
         }
         break;
       }
@@ -96,42 +105,11 @@ export const claudeStreamJsonParser: ParserPreset = {
 
   finalUsage(events: WorkerEvent[]): { tokens?: TokenUsage; iterations?: number } {
     for (let i = events.length - 1; i >= 0; i--) {
-      if (events[i]!.kind === 'result') {
-        try {
-          const parsed = JSON.parse(events[i]!.raw) as unknown;
-          if (
-            parsed !== null &&
-            typeof parsed === 'object' &&
-            !Array.isArray(parsed)
-          ) {
-            const obj = parsed as Record<string, unknown>;
-            let tokens: TokenUsage | undefined;
-            const usage = obj['usage'];
-            if (
-              usage !== null &&
-              typeof usage === 'object' &&
-              !Array.isArray(usage)
-            ) {
-              const u = usage as Record<string, unknown>;
-              const inp = typeof u['input_tokens'] === 'number' ? u['input_tokens'] : undefined;
-              const out = typeof u['output_tokens'] === 'number' ? u['output_tokens'] : undefined;
-              const reasoning = reasoningFromClaudeUsage(u);
-              if (inp !== undefined || out !== undefined || reasoning !== undefined) {
-                tokens = {
-                  input: inp,
-                  output: out,
-                  reasoning,
-                  ...(inp !== undefined || out !== undefined ? { total: (inp ?? 0) + (out ?? 0) } : {}),
-                };
-              }
-            }
-            const numTurns = typeof obj['num_turns'] === 'number' ? obj['num_turns'] : undefined;
-            return { tokens, iterations: numTurns };
-          }
-        } catch {
-          // fall through
-        }
-        break;
+      const ev = events[i]!;
+      if (ev.kind === 'result') {
+        // Read the tokens and iteration count captured at parse time from the FULL line — never
+        // re-parse ev.raw, which is truncated to 4000 chars (see parseLine / finalSummary).
+        return { tokens: ev.tokens, iterations: ev.iterations };
       }
     }
     return {};

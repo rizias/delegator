@@ -221,6 +221,10 @@ providers:
   as runtime `opencode`.
 - Slash-bearing model ids such as `opencode/north-mini-code-free` and `liquid/lfm2.5-1.2b` are valid.
 
+**Council takes a list of handles, with no config of its own.** `dlg council -w h1,h2,h3` accepts a
+comma-separated list of these same handles; the line-up is chosen per invocation (there is no council
+config file). See [USAGE.md](USAGE.md) and the `Council` entry in [GLOSSARY.md](GLOSSARY.md).
+
 ## Reasoning effort
 
 Reasoning effort is a per-**runtime** catalog. A runtime descriptor declares which levels its CLI's

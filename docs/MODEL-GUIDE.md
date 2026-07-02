@@ -98,6 +98,16 @@ A user who ran mechanical workers on a real Java repo distilled rules we adopt v
   with hard budgets. Your review surface is the brief plus the envelope.
 - Rule of thumb: *judgment near the session → native; volume away from the session → delegator.*
 
+### 2.3 Council — fan one task across several models
+
+When a task is open-ended with no test/oracle (design decisions, reviews, analysis, research),
+`dlg council -w m1,m2,m3 -m "<task>"` runs it across 2–4 DIFFERENT strong families in parallel and
+returns every answer plus a synthesis `bundle`; the orchestrator writes the final (or a headless caller
+passes `--aggregate <model>`). In practice it beats the strongest single model on judgment tasks but
+LOSES on short-form writing (synthesis bloats tight prose), at ~4x the worker-pool tokens. Diversity
+comes from different families — sampling temperature is not available through harnesses; a weak member
+drags the aggregate down. Not for mechanical coding — that is one worker. Full envelope: [USAGE.md](USAGE.md).
+
 ## 3. The pool rule — shared vs separate pools
 
 **The win is about shared vs separate *usage pools*, not pricing shape.** A worker on the *same*

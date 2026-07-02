@@ -129,7 +129,11 @@ test('provider maxConcurrent still gates across models', async () => {
 // NOT queue behind a different model's model-scoped slot.
 test('a model without limits.concurrent does not queue behind another model slot', async () => {
   const repo = makeRepo();
-  const runtimes = { claude: sleepByModelStub({ m1: 2000, m2: 300 }) };
+  // m1's hold and the assertion threshold are deliberately WIDE apart: test files run in
+  // parallel and sibling files (council-run) spawn real workers, so m2's own overhead can
+  // stretch well past its 300ms hold under load. Queuing behind m1 would cost >= ~6000ms,
+  // so < 4000ms still cleanly means "did not queue".
+  const runtimes = { claude: sleepByModelStub({ m1: 6000, m2: 300 }) };
   const c = cfg({
     workers: {
       w1: { provider: 'anth', model: 'm1', runtime: 'claude', limits: { concurrent: 1 } }, // gated, slow
@@ -146,8 +150,8 @@ test('a model without limits.concurrent does not queue behind another model slot
   await aP;
 
   assert.equal(b.status, 'completed', b.stopReason);
-  // m2 (300ms hold) must finish far inside m1's 2000ms hold → it did not wait on m1's slot.
-  assert.ok(bElapsed < 1500, `m2 must not queue behind m1 (took ${bElapsed}ms; m1 holds 2000ms)`);
+  // m2 (300ms hold) must finish far inside m1's 6000ms hold → it did not wait on m1's slot.
+  assert.ok(bElapsed < 4000, `m2 must not queue behind m1 (took ${bElapsed}ms; m1 holds 6000ms)`);
 });
 
 // (d) limits.concurrent declared UNDER the model (providers.x.models.y.limits) with a

@@ -48,6 +48,7 @@ export interface ExecuteRequest {
   budgetOverride?: Partial<BudgetSpec>;
   effortOverride?: ReasoningEffort;  // per-run reasoning effort, overrides the worker's default
   toolsOverride?: string[];
+  skipPrune?: boolean;
 }
 
 /** Every verification slot skipped for the SAME stated reason — never a bare "skipped",
@@ -209,13 +210,23 @@ function useGitIsolation(cwd: string): boolean {
   }
 }
 
-function cleanupAttempt(reqCwd: string, outcome: AttemptOutcome): void {
-  if (!outcome.worktree) return;
-  if (outcome.noGit) {
-    removeWorkspace(outcome.pristine, outcome.worktree);
-  } else {
-    removeWorktree(reqCwd, outcome.worktree);
+/** Best-effort reclamation of one attempt's workspace/worktree. Reclaim is the LAST step of a
+ *  run and must NEVER throw past the caller: on Windows fs.rmSync can hit EBUSY when an AV,
+ *  indexer, or just-exited worker still holds a handle on the temp dir — that must not sink an
+ *  already-finished run. Returns a warning string on failure (temp dir left on disk) or null. */
+export function reclaimAttemptWorkspace(outcome: AttemptOutcome, reqCwd: string, keepWorktree = false): string | null {
+  try {
+    if (outcome.noGit && outcome.worktree) removeWorkspace(outcome.pristine, outcome.worktree);
+    else if (outcome.worktree && !keepWorktree) removeWorktree(reqCwd, outcome.worktree);
+    return null;
+  } catch (e) {
+    return 'workspace cleanup failed — left on disk: ' + String(e instanceof Error ? e.message : e);
   }
+}
+
+function cleanupAttempt(reqCwd: string, outcome: AttemptOutcome): void {
+  // A discarded (failed/fallover) attempt: reclaim best-effort, never abort the run over it.
+  reclaimAttemptWorkspace(outcome, reqCwd);
 }
 
 export async function executeRun(
@@ -232,14 +243,14 @@ export async function executeRun(
   // tier, restricted, unconfigured direct worker) still throw → exit 2.
   const plan = resolveRunPlan(cfg, { workerId: req.workerId, tier: req.tier });
 
-  const id = store.newRunId();
+  let id = store.newRunId();
   const startedAt = Date.now();
 
   const first = plan.candidates[0];
   const firstBudget = first?.worker
     ? mergeBudget(cfg, plan.tierCfg, first.worker, req.budgetOverride)
     : { ...cfg.defaults.budget, ...req.budgetOverride };
-  const baseMeta: RunMeta = {
+  let baseMeta: RunMeta = {
     id,
     createdAt: new Date(startedAt).toISOString(),
     state: 'preparing',
@@ -261,7 +272,8 @@ export async function executeRun(
 
   // Brief lint happens before any worktree exists.
   if (!briefIsValid(req.brief)) {
-    store.createRun(baseMeta, req.brief);
+    baseMeta = store.createRun(baseMeta, req.brief);
+    id = baseMeta.id;
     const env = finalize(id, 'rejected', baseMeta.workerId, baseMeta.model, baseMeta.runtime, {
       summary: 'brief rejected before spawn',
       stopReason: 'brief is empty — pass a real task description (-f <file> or -m "<text>")',
@@ -274,7 +286,8 @@ export async function executeRun(
   }
 
   // Record the run now so onWait events have somewhere to go.
-  store.createRun(baseMeta, req.brief);
+  baseMeta = store.createRun(baseMeta, req.brief);
+  id = baseMeta.id;
 
   const attempts: AttemptRecord[] = [];
 
@@ -356,7 +369,8 @@ export async function executeRun(
     });
     const env = finalizeAttempt(id, resolved, outcome, budget, req, cfg, startedAt, attempts);
     store.updateMeta(id, { state: 'done', endedAt: new Date().toISOString() });
-    store.pruneRuns(cfg.defaults.keepRuns); // retention: oldest finished runs beyond the cap
+    // Council fan-out defers pruning until after gathering every sibling result.
+    if (!req.skipPrune) store.pruneRuns(cfg.defaults.keepRuns); // retention: oldest finished runs beyond the cap
     return env;
   }
 
@@ -971,22 +985,29 @@ function finalizeAttempt(
   // patch.diff is persisted either way, so `dlg apply <id>` works regardless. keepWorktree
   // also drives whether the envelope records the worktree path (below).
   let keepWorktree = false;
-  if (outcome.noGit && outcome.worktree) {
-    removeWorkspace(outcome.pristine, outcome.worktree);
-  } else if (outcome.worktree) {
+  if (!outcome.noGit && outcome.worktree) {
     const wr = cfg.defaults.worktreeRetention;
     const cleanlyDone = outcome.status === 'completed';
     keepWorktree =
       wr === 'keep' ? !applied                          // keep for inspect/resume unless auto-applied
       : wr === 'on-finish' ? false                      // always drop the checkout
       : !cleanlyDone && !applied;                       // keep-unfinished: keep only killed/failed/partial
-    if (!keepWorktree) removeWorktree(req.cwd, outcome.worktree);
   }
+
+  // Reclaim the workspace/worktree BEFORE finalizing. Reclaim is a best-effort last step that
+  // never throws (reclaimAttemptWorkspace returns a warning string on failure) — the patch is
+  // already written to the run store and any auto-apply already ran against req.cwd, so nothing
+  // here needs the workspace. Folding a cleanup warning into `errors` before the SINGLE finalize()
+  // keeps the envelope and the journal in agreement and avoids a second, unguarded envelope write.
+  const cleanupWarning = reclaimAttemptWorkspace(outcome, req.cwd, keepWorktree);
+  const finalErrors: ErrorEntry[] = cleanupWarning
+    ? [...errors, { type: 'internal', message: cleanupWarning }]
+    : errors;
 
   return finalize(id, outcome.status, resolved.workerId, resolved.worker.model, normalizeRuntimeId(resolved.worker.runtime), {
     summary: outcome.summary,
     stopReason: outcome.stopReason,
-    errors,
+    errors: finalErrors,
     verification: outcome.verification,
     wallClockMs: Date.now() - startedAt, // total run wall clock, including any fallover attempts
     ...(outcome.tokens ? { tokens: outcome.tokens } : {}),

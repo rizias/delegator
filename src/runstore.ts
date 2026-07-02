@@ -78,10 +78,23 @@ export function newRunId(): string {
 
 // ---------- lifecycle ----------
 
-export function createRun(meta: RunMeta, brief: string): void {
-  ensureDir(resolveRunDir(meta.id));
-  fs.writeFileSync(metaPath(meta.id), JSON.stringify(meta, null, 2), 'utf8');
-  fs.writeFileSync(briefPath(meta.id), brief, 'utf8');
+export function createRun(meta: RunMeta, brief: string, gen: () => string = newRunId): RunMeta {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const id = attempt === 0 ? meta.id : gen();
+    const runMeta = id === meta.id ? meta : { ...meta, id };
+    const dir = resolveRunDir(id);
+    try {
+      ensureDir(path.dirname(dir));
+      fs.mkdirSync(dir);
+      fs.writeFileSync(metaPath(id), JSON.stringify(runMeta, null, 2), 'utf8');
+      fs.writeFileSync(briefPath(id), brief, 'utf8');
+      return runMeta;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'EEXIST') continue;
+      throw err;
+    }
+  }
+  throw new Error('could not allocate unique run id after 5 attempts');
 }
 
 export function readMeta(id: string): RunMeta {

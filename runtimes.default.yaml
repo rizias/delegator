@@ -69,6 +69,10 @@ runtimes:
       - --json
       - --sandbox
       - workspace-write
+      # delegator always runs codex inside a sandbox dir IT created (git worktree or a plain
+      # workspace copy). The copy is not a git repo, and codex refuses non-git dirs without this
+      # flag ("Not inside a trusted directory"). The dir is trusted by construction, so skip.
+      - --skip-git-repo-check
       - - -m
         - "{{model.id}}"
       - - -c

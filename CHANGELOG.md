@@ -6,6 +6,23 @@ All notable changes to Delegator are documented here. This project adheres to
 
 ## [Unreleased]
 
+### Added
+- **`dlg council`** — fan ONE task out to several workers in parallel (`-w h1,h2,h3`) and gather every
+  full answer, diff, per-worker tokens (incl. reasoning) and a ready aggregate-and-synthesize `bundle`.
+  The command never picks a winner: the calling agent synthesizes the final answer from the bundle
+  (headless callers may pass `--aggregate <model>` to attach a `final` from one more worker). Members
+  run under forced `review` policy with deferred retention pruning; a failed/hung member becomes a
+  `failed`/`killed-*` candidate with a warning instead of sinking the run; fewer usable answers than
+  `--min-proposers` (default 2) marks the envelope `quorumMet: false` / `degraded`. No config: models
+  are chosen per invocation. Works in plain non-git folders. A completed member survives a workspace
+  cleanup failure — reclaim is best-effort, so a Windows `EBUSY` on `rmSync` (now retried) becomes a
+  non-fatal warning folded into the result instead of discarding the answer or stranding the run.
+- **executeRun `skipPrune` option** (used by council): callers that gather several sibling runs defer
+  retention pruning until every envelope is read, so an early-finished run can no longer be pruned away
+  mid-gather. `createRun` is also collision-safe now (regenerates the id on an existing directory).
+- **codex runtime: `--skip-git-repo-check`** — codex refused to run in the no-git workspace sandbox
+  ("Not inside a trusted directory"); delegator-created sandboxes are trusted by construction.
+
 ## [0.3.23] — 2026-06-23
 
 ### Added

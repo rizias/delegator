@@ -178,6 +178,19 @@ QUEUED -> PREPARING -> RUNNING <-> CHECKPOINT -> COLLECTING -> VERIFYING -> DONE
 Terminal statuses include `completed`, `partial`, `requires-review`, `failed`, `killed-timeout`,
 `killed-no-progress`, and `rejected`.
 
+### Council fan-out
+
+`dlg council` composes this same lifecycle N times in parallel — every member is a plain
+`executeRun` (forced `review` policy, `skipPrune` so retention cannot delete an early-finished
+sibling before gathering; pruning happens once after the gather). The command validates the model
+list (≥2 distinct handles; same-family pairs warn), fails fast on unknown handles, and returns
+candidates + an aggregate-and-synthesize bundle. It deliberately produces **no final answer** — the
+core stays brainless; synthesis belongs to the calling agent, which holds the conversation context
+(headless callers may name an `--aggregate` worker). Hang protection is the ordinary per-run
+machinery (silence kill, stall kill, wall-clock budget); a dead member becomes a `failed`/`killed-*`
+candidate with a warning, and a quorum shortfall is reported (`quorumMet`, `stopReason: degraded`),
+never auto-repaired.
+
 ---
 
 ## 6. Isolation and verification

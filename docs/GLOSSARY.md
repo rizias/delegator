@@ -13,3 +13,7 @@ the first term.
 | Envelope | Typed result object | The structured result for a run: status, attempts, diff, verification, usage, errors, and stop reason. |
 | Receipt | Kept run record | The lightweight retained run record, including the envelope, patch, and logs. |
 | Worktree | Isolated checkout | The separate git checkout where a worker runs and verification executes. |
+| Council | Multi-model fan-out | Running ONE task across several DIFFERENT worker models in parallel (`dlg council`), gathering every answer plus a synthesis `bundle`; the orchestrator (or an `--aggregate` model) writes the final. |
+| Bundle | Synthesis prompt | The ready aggregate-and-synthesize prompt `dlg council` returns, concatenating all candidates' answers for the orchestrator to synthesize a final from. |
+| Candidate | Council member result | One council worker's entry in the envelope: its `runId`, status, full answer, diff, and tokens. |
+| Quorum | Minimum proposers | The minimum count of usable council answers (`--min-proposers`, default 2); below it the envelope reports `quorumMet: false` / `stopReason: degraded`. |
