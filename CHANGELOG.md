@@ -6,6 +6,8 @@ All notable changes to Delegator are documented here. This project adheres to
 
 ## [Unreleased]
 
+## [0.4.1] — 2026-07-03
+
 ### Fixed
 - The concurrency gate no longer admits more workers than its limit when a slot holder stalls,
   crashes, or races another run for the same slot.
