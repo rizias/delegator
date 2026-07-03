@@ -7,7 +7,7 @@ import os from 'node:os';
 
 // Isolate the config home so tests never touch the real ~/.delegator.
 process.env.DELEGATOR_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'dlg-test-'));
-const { acquireSlot, scopeOccupancy, heartbeatSlot } = await import('../dist/semaphore.js');
+const { acquireSlot, scopeOccupancy, heartbeatSlot, unclaimSlot } = await import('../dist/semaphore.js');
 
 function slotFile(scope, n) {
   const dir = path.join(process.env.DELEGATOR_HOME, 'locks', scope);
@@ -62,6 +62,59 @@ test('a live holder with a stale heartbeat keeps its slot (no over-admission)', 
   const thief = await acquireSlot('s4', { limit: 1, runId: 'thief', queueTimeoutMs: 150, pollMs: 20 });
   assert.equal(thief, null, 'a stale-but-alive holder must not be evicted');
   assert.equal(JSON.parse(fs.readFileSync(p, 'utf8')).runId, 'stalled', 'holder slot file must be untouched');
+  assert.equal(scopeOccupancy('s4').held, 1, 'a stale-but-alive holder still counts as occupancy');
+});
+
+test('unclaimSlot() restores a live claim it renamed on a stale verdict', () => {
+  // The ABA case: a reclaimer judged the slot dead, but by the time it renames,
+  // the path holds a DIFFERENT, live claim. The reclaim must detect that on the
+  // immobilized file and put it back — not admit through it.
+  const p = slotFile('s9', 0);
+  const live = JSON.stringify({ pid: process.pid, ts: Date.now(), runId: 'live' });
+  fs.writeFileSync(p, live);
+  assert.equal(unclaimSlot(path.dirname(p), 0), false, 'a live claim must never be unclaimed');
+  assert.ok(fs.existsSync(p), 'the live slot file must be restored');
+  assert.equal(fs.readFileSync(p, 'utf8'), live, 'restored content must be byte-identical');
+  const leftovers = fs.readdirSync(path.dirname(p)).filter((f) => !f.endsWith('.slot'));
+  assert.deepEqual(leftovers, [], 'no tombstone/tmp residue after a restore');
+});
+
+test('unclaimSlot() removes a provably dead holder file', () => {
+  const p = slotFile('s9', 1);
+  fs.writeFileSync(p, JSON.stringify({ pid: 999999, ts: Date.now(), runId: 'dead' }));
+  assert.equal(unclaimSlot(path.dirname(p), 1), true);
+  assert.ok(!fs.existsSync(p));
+});
+
+test('unclaimSlot() puts back a fresh unreadable file', () => {
+  const p = slotFile('s9', 2);
+  fs.writeFileSync(p, '{"pid":12'); // truncated JSON, fresh mtime
+  assert.equal(unclaimSlot(path.dirname(p), 2), false, 'fresh garbage may be a peer mid-write');
+  assert.ok(fs.existsSync(p), 'the file must be restored for its writer');
+});
+
+test('unclaimSlot() discards old garbage', () => {
+  const p = slotFile('s9', 3);
+  fs.writeFileSync(p, 'not json at all');
+  const old = (Date.now() - 600_000) / 1000;
+  fs.utimesSync(p, old, old);
+  assert.equal(unclaimSlot(path.dirname(p), 3), true);
+  assert.ok(!fs.existsSync(p));
+});
+
+test('two concurrent acquirers on one dead slot admit exactly one', async () => {
+  const p = slotFile('s10', 0);
+  fs.writeFileSync(p, JSON.stringify({ pid: 999999, ts: Date.now(), runId: 'dead' }));
+  const [a, b] = await Promise.all([
+    acquireSlot('s10', { limit: 1, runId: 'a', queueTimeoutMs: 200, pollMs: 20 }),
+    acquireSlot('s10', { limit: 1, runId: 'b', queueTimeoutMs: 200, pollMs: 20 }),
+  ]);
+  const winners = [a, b].filter(Boolean);
+  assert.equal(winners.length, 1, `exactly one of two racers must win (got ${winners.length})`);
+  assert.equal(scopeOccupancy('s10').held, 1, 'occupancy must never exceed the limit');
+  const residue = fs.readdirSync(path.dirname(p)).filter((f) => !f.endsWith('.slot'));
+  assert.deepEqual(residue, [], 'no tmp/tombstone residue after claims');
+  winners[0].release();
 });
 
 test("release() leaves a slot file it no longer owns untouched", async () => {

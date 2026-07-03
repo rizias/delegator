@@ -38,28 +38,72 @@ function pidAlive(pid: number): boolean {
 }
 
 /**
- * Atomically take an abandoned slot file out of service before re-claiming it.
- * Of N racing reclaimers exactly one rename succeeds, so a reclaim can never
- * delete a file some peer just re-created — the losers simply poll again.
+ * Take slot n's file out of service — with the "abandoned" verdict re-judged
+ * AFTER the file is immobilized. renameSync first: of N racing reclaimers
+ * exactly one wins, and the renamed file can no longer change under us, so
+ * re-reading it now is authoritative. The caller's pre-rename read may be
+ * stale (the ABA case: the dead slot was reclaimed AND re-claimed by a live
+ * run inside the caller's read→rename gap) — then the tomb holds a live claim
+ * and is put back via linkSync, which is atomic and fails-if-exists, so a
+ * restore can never clobber a third racer's fresh claim. Residual window: a
+ * third claim landing while we hold a stolen live tomb orphans the victim's
+ * file (its heartbeat then just stops beating; it keeps running) — that takes
+ * two independent sub-ms coincidences to line up. Exported for tests.
  */
-function unclaimSlot(dir: string, n: number): boolean {
+export function unclaimSlot(dir: string, n: number): boolean {
   const p = path.join(dir, `${n}.slot`);
   const tomb = path.join(dir, `${n}.${process.pid}.reclaim`); // must not end in .slot: invisible to claim/occupancy
-  try { fs.renameSync(p, tomb); } catch { return false; }
-  try { fs.rmSync(tomb, { force: true }); } catch { /* orphaned tombstone is inert */ }
-  return true;
+  try { fs.renameSync(p, tomb); } catch { return false; } // lost the rename race, or transient FS refusal
+  let abandoned = false;
+  try {
+    const held = JSON.parse(fs.readFileSync(tomb, 'utf8')) as SlotInfo;
+    if (typeof held.pid !== 'number') throw new Error('malformed slot file');
+    abandoned = !pidAlive(held.pid);
+  } catch {
+    // Unreadable garbage: abandoned only when the FILE is old (rename keeps mtime).
+    try { abandoned = Date.now() - fs.statSync(tomb).mtimeMs > STALE_MS; } catch { abandoned = false; }
+  }
+  if (abandoned) {
+    try { fs.rmSync(tomb, { force: true }); } catch { /* orphaned tombstone is inert */ }
+    return true;
+  }
+  // Stale verdict — the tomb holds a claim that must keep its slot. Put it back.
+  try { fs.linkSync(tomb, p); } catch { /* p was re-claimed while we held the tomb — nothing safe to restore onto */ }
+  try { fs.rmSync(tomb, { force: true }); } catch { /* ignore */ }
+  return false;
 }
 
 /** Try to atomically claim slot n. Returns true on success. */
 function claim(dir: string, n: number, info: SlotInfo): boolean {
   const p = path.join(dir, `${n}.slot`);
+  // Create atomically: write the full content, then link into place. linkSync
+  // is exclusive like 'wx', but the slot file can never be observed empty or
+  // half-written — a claimant suspended between a create and its write used to
+  // leave an aging empty file that a peer would "reclaim" by mtime while the
+  // resumed owner went on to admit itself through its still-open fd.
+  const tmp = path.join(dir, `${n}.${process.pid}.tmp`);
   try {
-    const fd = fs.openSync(p, 'wx'); // wx = create-exclusive, fails if exists
-    fs.writeSync(fd, JSON.stringify(info));
-    fs.closeSync(fd);
+    fs.writeFileSync(tmp, JSON.stringify(info));
+    fs.linkSync(tmp, p);
+    fs.rmSync(tmp, { force: true });
     return true;
   } catch (e) {
-    if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
+    try { fs.rmSync(tmp, { force: true }); } catch { /* ignore */ }
+    const code = (e as NodeJS.ErrnoException).code;
+    if (code === 'EPERM' || code === 'ENOSYS' || code === 'ENOTSUP' || code === 'EOPNOTSUPP') {
+      // A filesystem without hardlinks (exotic for ~/.delegator, but possible):
+      // fall back to create-exclusive. Only there the born-atomic guarantee is
+      // reduced to what an empty file self-heals via the mtime rule.
+      try {
+        const fd = fs.openSync(p, 'wx');
+        try { fs.writeSync(fd, JSON.stringify(info)); } finally { fs.closeSync(fd); }
+        return true;
+      } catch (e2) {
+        if ((e2 as NodeJS.ErrnoException).code !== 'EEXIST') throw e2;
+      }
+    } else if (code !== 'EEXIST') {
+      throw e;
+    }
   }
   // Occupied. Reclaim ONLY a provably dead holder — never a live pid, however
   // stale its heartbeat: a stalled-but-running holder (suspended laptop, GC
@@ -78,7 +122,10 @@ function claim(dir: string, n: number, info: SlotInfo): boolean {
     // a fresh one is likely a peer's write we caught halfway through.
     try { abandoned = Date.now() - fs.statSync(p).mtimeMs > STALE_MS; } catch { return false; }
   }
-  if (abandoned && unclaimSlot(dir, n)) return claim(dir, n, info); // one retry; a racer may still win the create
+  // Re-enter after a successful unclaim (a racer may still win the create).
+  // Bounded in practice: each further level needs a fresh holder to die inside
+  // the microsecond reclaim window.
+  if (abandoned && unclaimSlot(dir, n)) return claim(dir, n, info);
   return false;
 }
 

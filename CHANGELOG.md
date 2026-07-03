@@ -16,6 +16,12 @@ All notable changes to Delegator are documented here. This project adheres to
   old by mtime, so a reader can't nuke a peer's half-written slot); reclaim goes through an atomic
   rename so exactly one racer wins; heartbeat and release verify pid+runId ownership and never
   touch a foreign slot file; heartbeat rewrites are atomic (tmp + rename).
+  A follow-up review caught two residual races, also closed: the reclaim verdict is re-judged
+  AFTER the rename immobilizes the file, so a stale "it's dead" verdict can no longer unclaim a
+  freshly re-claimed live slot (it is restored via an atomic link that cannot clobber a third
+  claim); and slot files are born complete — content is written to a tmp file and linked into
+  place — so a claimant suspended mid-create can never leave an aging empty file for peers to
+  misreclaim.
 - **Workspace patches no longer mangle backslashes in file bodies.** For non-git workers (e.g.
   opencode), the `git diff --no-index` pipeline normalized `\` → `/` across the ENTIRE patch text,
   so delivered code lost every backslash — regexes (`re.compile(r'\d+')`), escape sequences (`\n`,
