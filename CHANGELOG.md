@@ -7,6 +7,15 @@ All notable changes to Delegator are documented here. This project adheres to
 ## [Unreleased]
 
 ### Fixed
+- **The cross-process slot gate can no longer over-admit workers past its limit.** Three ownership
+  gaps let `limit`+1 workers run at once: a live holder whose heartbeat stalled past 60s (suspended
+  laptop, GC pause, blocked event loop) was evicted as "stale"; `release()` and the heartbeat wrote
+  the slot path without checking WHO owns the file, so a stalled holder could delete or overwrite
+  its successor's slot; and two waiters racing one dead slot could both "reclaim" it. A slot is now
+  reclaimable only when its holder pid is provably dead (an unreadable file only when it is also
+  old by mtime, so a reader can't nuke a peer's half-written slot); reclaim goes through an atomic
+  rename so exactly one racer wins; heartbeat and release verify pid+runId ownership and never
+  touch a foreign slot file; heartbeat rewrites are atomic (tmp + rename).
 - **Workspace patches no longer mangle backslashes in file bodies.** For non-git workers (e.g.
   opencode), the `git diff --no-index` pipeline normalized `\` → `/` across the ENTIRE patch text,
   so delivered code lost every backslash — regexes (`re.compile(r'\d+')`), escape sequences (`\n`,
