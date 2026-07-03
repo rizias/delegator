@@ -1,7 +1,31 @@
-// Cross-process concurrency control. Each run claims a slot in a scope before
+// Cross-process concurrency control. Each run takes a ticket in a scope before
 // spawning its worker; if the scope is full it WAITS (queues) instead of failing.
-// This is what stops a local 1-GPU model from being asked to run 50 agents at once
-// Set the provider's maxConcurrent to 1 and excess runs line up.
+// This is what stops a local 1-GPU model from being asked to run 50 agents at once:
+// set the provider's maxConcurrent to 1 and excess runs line up.
+//
+// Design: a write-once bakery gate (Lamport, "A New Solution of Dijkstra's
+// Concurrent Programming Problem", CACM 1974 —
+// https://lamport.azurewebsites.net/pubs/bakery.pdf). ALL claim state lives in
+// the NAMES of zero-byte files: `ticket-<num>-<pid>-<runId>` (a queue position),
+// `choosing-<pid>-<runId>` (a doorway announcement), `held-<pid>-<runId>` (an
+// admission marker, display-only). Nothing is ever renamed, rewritten, or
+// restored, and non-owners delete ONLY files whose name-embedded pid is dead —
+// so a file's path IS its identity and a deadness verdict can never be applied
+// to the wrong claim. There is no heartbeat and no staleness clock: pid
+// liveness is the single reclaim oracle (process.kill(pid, 0) never reports a
+// live pid as dead; EPERM counts as alive). Earlier designs arbitrated reused
+// slot paths with rename/restore; three adversarial review rounds each found an
+// over-admission interleaving in that class, which is why this file avoids
+// mutation of shared paths entirely.
+//
+// Accepted tradeoffs (deliberate, visible via queue timeout + `dlg queue`):
+// - a process suspended INSIDE the three-syscall doorway stalls its scope until
+//   it resumes or dies (machine-wide sleep suspends every contender anyway);
+// - a crashed holder whose pid the OS recycled onto a long-lived foreign
+//   process pins its queue position until that process exits.
+// Upgrade note: lock files of the pre-bakery format (`<n>.slot`, JSON content)
+// are invisible to this gate; mixed-version processes do not share a limit
+// during the upgrade window.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -19,11 +43,18 @@ interface SlotInfo {
   runId: string;
 }
 
-const STALE_MS = 60_000; // heartbeat cadence base; also how old an UNREADABLE slot file must be before it counts as abandoned
+const TICKET_RE = /^ticket-(\d{10})-(\d+)-(.+)$/;
+const CHOOSING_RE = /^choosing-(\d+)-(.+)$/;
+const HELD_RE = /^held-(\d+)-(.+)$/;
 
 function locksDir(scope: string): string {
   const safe = scope.replace(/[^a-zA-Z0-9_-]+/g, '_');
   return path.join(configHome(), 'locks', safe);
+}
+
+// runIds are filename-embedded; sanitize the same way as scopes.
+function safeId(id: string): string {
+  return id.replace(/[^a-zA-Z0-9_-]+/g, '_');
 }
 
 function pidAlive(pid: number): boolean {
@@ -37,123 +68,70 @@ function pidAlive(pid: number): boolean {
   }
 }
 
-/**
- * Take slot n's file out of service — with the "abandoned" verdict re-judged
- * AFTER the file is immobilized. renameSync first: of N racing reclaimers
- * exactly one wins, and the renamed file can no longer change under us, so
- * re-reading it now is authoritative. The caller's pre-rename read may be
- * stale (the ABA case: the dead slot was reclaimed AND re-claimed by a live
- * run inside the caller's read→rename gap) — then the tomb holds a live claim
- * and is put back via linkSync, which is atomic and fails-if-exists, so a
- * restore can never clobber a third racer's fresh claim. Residual window: a
- * third claim landing while we hold a stolen live tomb orphans the victim's
- * file (its heartbeat then just stops beating; it keeps running) — that takes
- * two independent sub-ms coincidences to line up. Exported for tests.
- */
-export function unclaimSlot(dir: string, n: number): boolean {
-  const p = path.join(dir, `${n}.slot`);
-  const tomb = path.join(dir, `${n}.${process.pid}.reclaim`); // must not end in .slot: invisible to claim/occupancy
-  try { fs.renameSync(p, tomb); } catch { return false; } // lost the rename race, or transient FS refusal
-  let abandoned = false;
-  try {
-    const held = JSON.parse(fs.readFileSync(tomb, 'utf8')) as SlotInfo;
-    if (typeof held.pid !== 'number') throw new Error('malformed slot file');
-    abandoned = !pidAlive(held.pid);
-  } catch {
-    // Unreadable garbage: abandoned only when the FILE is old (rename keeps mtime).
-    try { abandoned = Date.now() - fs.statSync(tomb).mtimeMs > STALE_MS; } catch { abandoned = false; }
-  }
-  if (abandoned) {
-    try { fs.rmSync(tomb, { force: true }); } catch { /* orphaned tombstone is inert */ }
-    return true;
-  }
-  // Stale verdict — the tomb holds a claim that must keep its slot. Put it back.
-  try { fs.linkSync(tomb, p); } catch { /* p was re-claimed while we held the tomb — nothing safe to restore onto */ }
-  try { fs.rmSync(tomb, { force: true }); } catch { /* ignore */ }
-  return false;
+function rmQuiet(p: string): void {
+  try { fs.rmSync(p, { force: true }); } catch { /* transient FS refusal — retried on a later pass */ }
 }
 
-/** Try to atomically claim slot n. Returns true on success. */
-function claim(dir: string, n: number, info: SlotInfo): boolean {
-  const p = path.join(dir, `${n}.slot`);
-  // Create atomically: write the full content, then link into place. linkSync
-  // is exclusive like 'wx', but the slot file can never be observed empty or
-  // half-written — a claimant suspended between a create and its write used to
-  // leave an aging empty file that a peer would "reclaim" by mtime while the
-  // resumed owner went on to admit itself through its still-open fd.
-  const tmp = path.join(dir, `${n}.${process.pid}.tmp`);
-  try {
-    fs.writeFileSync(tmp, JSON.stringify(info));
-    fs.linkSync(tmp, p);
-    fs.rmSync(tmp, { force: true });
-    return true;
-  } catch (e) {
-    try { fs.rmSync(tmp, { force: true }); } catch { /* ignore */ }
-    const code = (e as NodeJS.ErrnoException).code;
-    if (code === 'EPERM' || code === 'ENOSYS' || code === 'ENOTSUP' || code === 'EOPNOTSUPP') {
-      // A filesystem without hardlinks (exotic for ~/.delegator, but possible):
-      // fall back to create-exclusive. Only there the born-atomic guarantee is
-      // reduced to what an empty file self-heals via the mtime rule.
-      try {
-        const fd = fs.openSync(p, 'wx');
-        try { fs.writeSync(fd, JSON.stringify(info)); } finally { fs.closeSync(fd); }
-        return true;
-      } catch (e2) {
-        if ((e2 as NodeJS.ErrnoException).code !== 'EEXIST') throw e2;
-      }
-    } else if (code !== 'EEXIST') {
-      throw e;
+/** Create an empty file, exclusively. The single atomic syscall IS the claim. */
+function touchNew(p: string): void {
+  fs.closeSync(fs.openSync(p, 'wx'));
+}
+
+interface Ticket { name: string; num: number; pid: number; runId: string; }
+
+/**
+ * One pass over the scope dir: collect live choosing announcements and live
+ * tickets (sorted into the admission order), and lazily GC every entry whose
+ * name-embedded pid is dead. Blind removal is safe precisely because files are
+ * write-once and their path encodes their identity — a dead entry can never
+ * "become" someone else's live claim.
+ */
+function gcAndList(dir: string): { choosing: string[]; tickets: Ticket[] } {
+  let names: string[] = [];
+  try { names = fs.readdirSync(dir); } catch { return { choosing: [], tickets: [] }; }
+  const choosing: string[] = [];
+  const tickets: Ticket[] = [];
+  for (const f of names) {
+    let m = CHOOSING_RE.exec(f);
+    if (m) {
+      if (pidAlive(Number(m[1]))) choosing.push(f);
+      else rmQuiet(path.join(dir, f));
+      continue;
     }
+    m = TICKET_RE.exec(f);
+    if (m) {
+      const t: Ticket = { name: f, num: Number(m[1]), pid: Number(m[2]), runId: m[3] ?? '' };
+      if (pidAlive(t.pid)) tickets.push(t);
+      else rmQuiet(path.join(dir, f));
+      continue;
+    }
+    m = HELD_RE.exec(f);
+    if (m && !pidAlive(Number(m[1]))) rmQuiet(path.join(dir, f));
   }
-  // Occupied. Reclaim ONLY a provably dead holder — never a live pid, however
-  // stale its heartbeat: a stalled-but-running holder (suspended laptop, GC
-  // pause, blocked event loop) still owns its slot, and evicting it would admit
-  // limit+1 workers at once. Cost of this contract: a crashed holder whose pid
-  // the OS recycled onto a long-lived process pins its slot until that process
-  // exits — the queue timeout keeps that failure visible (runs reject with a
-  // clear reason) instead of silently breaking the limit.
-  let abandoned = false;
-  try {
-    const held = JSON.parse(fs.readFileSync(p, 'utf8')) as SlotInfo;
-    if (typeof held.pid !== 'number') throw new Error('malformed slot file');
-    abandoned = !pidAlive(held.pid);
-  } catch {
-    // Unreadable or malformed. Treat as abandoned only when the FILE is old —
-    // a fresh one is likely a peer's write we caught halfway through.
-    try { abandoned = Date.now() - fs.statSync(p).mtimeMs > STALE_MS; } catch { return false; }
-  }
-  // Re-enter after a successful unclaim (a racer may still win the create).
-  // Bounded in practice: each further level needs a fresh holder to die inside
-  // the microsecond reclaim window.
-  if (abandoned && unclaimSlot(dir, n)) return claim(dir, n, info);
-  return false;
+  // Total order: ticket number, then runId — every observer computes the same ranking.
+  tickets.sort((a, b) => (a.num - b.num) || (a.runId < b.runId ? -1 : a.runId > b.runId ? 1 : 0));
+  return { choosing, tickets };
 }
 
 /**
- * One heartbeat tick: freshen the slot file's ts IF the slot is still ours
- * (same pid AND runId). Returns false when it no longer is — released,
- * reclaimed, or handed to another run — in which case the caller must stop
- * beating and must NOT recreate the file: resurrecting it would admit two
- * runs through one slot. Exported for tests.
+ * Lamport's doorway: announce "choosing", take 1+max of the ticket numbers in
+ * sight, place the ticket, retract the announcement. Peers must not decide the
+ * order while a live announcement stands — that wait is what makes two
+ * simultaneous choosers safe even when they pick the same number (ties break
+ * deterministically by runId).
  */
-export function heartbeatSlot(slotPath: string, own: SlotInfo): boolean {
+function chooseTicket(dir: string, runId: string): Ticket {
+  const choosingPath = path.join(dir, `choosing-${process.pid}-${runId}`);
+  touchNew(choosingPath);
   try {
-    const held = JSON.parse(fs.readFileSync(slotPath, 'utf8')) as SlotInfo;
-    if (held.pid !== own.pid || held.runId !== own.runId) return false;
-  } catch {
-    return false; // gone or unreadable — assume lost; never resurrect
+    const { tickets } = gcAndList(dir);
+    const num = 1 + tickets.reduce((m, t) => Math.max(m, t.num), 0);
+    const name = `ticket-${String(num).padStart(10, '0')}-${process.pid}-${runId}`;
+    touchNew(path.join(dir, name));
+    return { name, num, pid: process.pid, runId };
+  } finally {
+    rmQuiet(choosingPath);
   }
-  // Write-then-rename so a polling claimant can never read half-written JSON
-  // and mistake a live slot for an abandoned one.
-  const tmp = `${slotPath}.${own.pid}.hb`;
-  try {
-    fs.writeFileSync(tmp, JSON.stringify({ ...own, ts: Date.now() }));
-    fs.renameSync(tmp, slotPath);
-  } catch {
-    try { fs.rmSync(tmp, { force: true }); } catch { /* ignore */ }
-    // Transient FS refusal: we still own the slot; the next beat retries.
-  }
-  return true;
 }
 
 export interface AcquireOpts {
@@ -175,39 +153,42 @@ export async function acquireSlot(scope: string, opts: AcquireOpts): Promise<Slo
   }
   const dir = locksDir(scope);
   ensureDir(dir);
+  const runId = safeId(opts.runId);
   const started = Date.now();
-  const info: SlotInfo = { pid: process.pid, ts: started, runId: opts.runId };
+  let mine = chooseTicket(dir, runId);
+  const minePath = () => path.join(dir, mine.name);
   let notifiedWait = false;
-  let heartbeat: ReturnType<typeof setInterval> | null = null;
 
   for (;;) {
-    for (let n = 0; n < opts.limit; n++) {
-      info.ts = Date.now();
-      if (claim(dir, n, info)) {
-        const slotPath = path.join(dir, `${n}.slot`);
-        // Keep our slot fresh; if we ever find it is no longer ours, stop
-        // beating — heartbeatSlot never resurrects or overwrites a foreign file.
-        heartbeat = setInterval(() => {
-          if (!heartbeatSlot(slotPath, info) && heartbeat) { clearInterval(heartbeat); heartbeat = null; }
-        }, Math.floor(STALE_MS / 3));
-        heartbeat.unref?.();
-        const handle: SlotHandle = {
-          slot: n,
+    const { choosing, tickets } = gcAndList(dir);
+    // Doorway wait: while any LIVE peer is mid-choosing the order is not decidable.
+    if (!choosing.some((c) => c !== `choosing-${process.pid}-${runId}`)) {
+      const idx = tickets.findIndex((t) => t.name === mine.name);
+      if (idx === -1) {
+        // Our ticket vanished (only possible through outside interference —
+        // peers GC dead pids only, and we are alive). Re-enter the doorway.
+        mine = chooseTicket(dir, runId);
+        continue;
+      }
+      if (idx < opts.limit) {
+        // Admitted by rank. The held marker is DISPLAY-ONLY state for
+        // scopeOccupancy — admission is decided by the ticket order alone.
+        const heldPath = path.join(dir, `held-${process.pid}-${runId}`);
+        try { touchNew(heldPath); } catch { /* leftover from an identical crashed runId — display-only */ }
+        return {
+          slot: mine.num,
           waitedMs: Date.now() - started,
           release: () => {
-            if (heartbeat) { clearInterval(heartbeat); heartbeat = null; }
-            // Delete only what is still ours: if the slot was handed to another
-            // run, deleting the path would silently admit yet another worker.
-            try {
-              const held = JSON.parse(fs.readFileSync(slotPath, 'utf8')) as SlotInfo;
-              if (held.pid === info.pid && held.runId === info.runId) fs.rmSync(slotPath, { force: true });
-            } catch { /* already gone or unreadable — nothing of ours left to free */ }
+            rmQuiet(heldPath);
+            rmQuiet(minePath());
           },
         };
-        return handle;
       }
     }
-    if (Date.now() - started > opts.queueTimeoutMs) return null;
+    if (Date.now() - started > opts.queueTimeoutMs) {
+      rmQuiet(minePath()); // leave no queue position behind
+      return null;
+    }
     if (!notifiedWait) {
       notifiedWait = true;
       opts.onWait?.(Date.now() - started);
@@ -219,16 +200,17 @@ export async function acquireSlot(scope: string, opts: AcquireOpts): Promise<Slo
 /** Inspect a scope: how many slots are held right now (for `dlg queue`/status). */
 export function scopeOccupancy(scope: string): { held: number; holders: SlotInfo[] } {
   const dir = locksDir(scope);
-  let files: string[] = [];
-  try { files = fs.readdirSync(dir).filter((f) => f.endsWith('.slot')); } catch { return { held: 0, holders: [] }; }
+  let names: string[] = [];
+  try { names = fs.readdirSync(dir); } catch { return { held: 0, holders: [] }; }
   const holders: SlotInfo[] = [];
-  for (const f of files) {
-    try {
-      const held = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')) as SlotInfo;
-      // Same contract as claim(): a live pid holds its slot no matter how stale
-      // its heartbeat; only a dead holder's file does not count as occupancy.
-      if (typeof held.pid === 'number' && pidAlive(held.pid)) holders.push(held);
-    } catch { /* skip */ }
+  for (const f of names) {
+    const m = HELD_RE.exec(f);
+    if (!m) continue;
+    const pid = Number(m[1]);
+    if (!pidAlive(pid)) continue; // stale marker of a crashed holder; GCed by the next acquirer
+    let ts = 0;
+    try { ts = Math.round(fs.statSync(path.join(dir, f)).mtimeMs); } catch { /* racing a release */ }
+    holders.push({ pid, ts, runId: m[2] ?? '' });
   }
   return { held: holders.length, holders };
 }

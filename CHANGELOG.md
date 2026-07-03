@@ -7,21 +7,19 @@ All notable changes to Delegator are documented here. This project adheres to
 ## [Unreleased]
 
 ### Fixed
-- **The cross-process slot gate can no longer over-admit workers past its limit.** Three ownership
-  gaps let `limit`+1 workers run at once: a live holder whose heartbeat stalled past 60s (suspended
-  laptop, GC pause, blocked event loop) was evicted as "stale"; `release()` and the heartbeat wrote
-  the slot path without checking WHO owns the file, so a stalled holder could delete or overwrite
-  its successor's slot; and two waiters racing one dead slot could both "reclaim" it. A slot is now
-  reclaimable only when its holder pid is provably dead (an unreadable file only when it is also
-  old by mtime, so a reader can't nuke a peer's half-written slot); reclaim goes through an atomic
-  rename so exactly one racer wins; heartbeat and release verify pid+runId ownership and never
-  touch a foreign slot file; heartbeat rewrites are atomic (tmp + rename).
-  A follow-up review caught two residual races, also closed: the reclaim verdict is re-judged
-  AFTER the rename immobilizes the file, so a stale "it's dead" verdict can no longer unclaim a
-  freshly re-claimed live slot (it is restored via an atomic link that cannot clobber a third
-  claim); and slot files are born complete — content is written to a tmp file and linked into
-  place — so a claimant suspended mid-create can never leave an aging empty file for peers to
-  misreclaim.
+- **The cross-process concurrency gate was rewritten as a write-once "bakery" queue and can no
+  longer over-admit workers past its limit.** The previous gate arbitrated reused slot files
+  (`0.slot…N.slot`) with delete/rename-based reclaim; adversarial review kept finding
+  interleavings where a stale "holder is dead" verdict was applied to a reused path that
+  meanwhile held someone else's live claim, silently admitting `limit`+1 workers. Now every run
+  takes a zero-byte, write-once ticket file whose NAME carries its number, pid, and run id
+  (Lamport's bakery order); admission is a pure function of the live-ticket order, nothing is
+  ever renamed or rewritten, and the only file another process may delete is one whose
+  name-embedded pid is provably dead. Heartbeats, staleness clocks, and the 60-second reclaim
+  window are gone together with their bugs: a stalled-but-alive holder keeps its slot
+  indefinitely (visible in `dlg queue`), a crashed holder is collected on the next poll, and a
+  queue timeout still ends the run as `rejected`. Lock files of the old format are ignored;
+  mixed old/new versions do not share a limit during the upgrade window.
 - **Workspace patches no longer mangle backslashes in file bodies.** For non-git workers (e.g.
   opencode), the `git diff --no-index` pipeline normalized `\` → `/` across the ENTIRE patch text,
   so delivered code lost every backslash — regexes (`re.compile(r'\d+')`), escape sequences (`\n`,
