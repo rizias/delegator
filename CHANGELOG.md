@@ -6,41 +6,15 @@ All notable changes to Delegator are documented here. This project adheres to
 
 ## [Unreleased]
 
-### Documentation
-- **Council guidance now states the measured reason for mixed-model composition.** The earlier
-  claim that "sampling temperature is not available through harnesses" was wrong as stated
-  (opencode exposes a per-agent `temperature`; a direct-api runtime can carry one) — and beside
-  the point: side-by-side evals (2026-07-03) show that self-ensembling ONE model — repeat
-  sampling with or without a temperature dial, restyled sample prompts, or a critique-then-refine
-  aggregator — gains nothing an independent judge can reliably distinguish from a single call,
-  while a council of DIFFERENT strong families beats the single model 8/10 with a stable judge.
-  MODEL-GUIDE, the council spec docs, and the delegator host skills now carry the measured
-  rationale instead of the availability claim.
-
 ### Fixed
-- **The cross-process concurrency gate was rewritten as a write-once "bakery" queue and can no
-  longer over-admit workers past its limit.** The previous gate arbitrated reused slot files
-  (`0.slot…N.slot`) with delete/rename-based reclaim; adversarial review kept finding
-  interleavings where a stale "holder is dead" verdict was applied to a reused path that
-  meanwhile held someone else's live claim, silently admitting `limit`+1 workers. Now every run
-  takes a zero-byte, write-once ticket file whose NAME carries its number, pid, and run id
-  (Lamport's bakery order); admission is a pure function of the live-ticket order, nothing is
-  ever renamed or rewritten, and the only file another process may delete is one whose
-  name-embedded pid is provably dead. Heartbeats, staleness clocks, and the 60-second reclaim
-  window are gone together with their bugs: a stalled-but-alive holder keeps its slot
-  indefinitely (visible in `dlg queue`), a crashed holder is collected on the next poll, and a
-  queue timeout still ends the run as `rejected`. Lock files of the old format are ignored;
-  mixed old/new versions do not share a limit during the upgrade window.
-  The ranking is total even for colliding run ids (final tiebreak: the unique lock filename), and
-  every lock name carries a per-process sequence number, so a duplicated run id can never collide
-  on a name or split the order.
-- **Workspace patches no longer mangle backslashes in file bodies.** For non-git workers (e.g.
-  opencode), the `git diff --no-index` pipeline normalized `\` → `/` across the ENTIRE patch text,
-  so delivered code lost every backslash — regexes (`re.compile(r'\d+')`), escape sequences (`\n`,
-  `"a\\b"`), and Windows paths arrived corrupted while the run still reported `completed`. Path
-  normalization is now confined to diff **headers**; hunk bodies (and the `\ No newline at end of
-  file` marker) are preserved byte-for-byte. Header rewriting is hunk-aware, so a body line that
-  looks like a header (a removed `-- foo` printing as `--- foo`) is no longer misrewritten.
+- The concurrency gate no longer admits more workers than its limit when a slot holder stalls,
+  crashes, or races another run for the same slot.
+- Non-git worker patches (e.g. opencode) no longer corrupt backslashes in file bodies, so regexes,
+  escape sequences, and Windows paths arrive intact.
+
+### Documentation
+- Council guidance now recommends mixing different model families, backed by measured evals, and
+  drops the inaccurate note that sampling temperature is unavailable through harnesses.
 
 ## [0.4.0] — 2026-07-02
 
