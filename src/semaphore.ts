@@ -6,9 +6,10 @@
 // Design: a write-once bakery gate (Lamport, "A New Solution of Dijkstra's
 // Concurrent Programming Problem", CACM 1974 —
 // https://lamport.azurewebsites.net/pubs/bakery.pdf). ALL claim state lives in
-// the NAMES of zero-byte files: `ticket-<num>-<pid>-<runId>` (a queue position),
-// `choosing-<pid>-<runId>` (a doorway announcement), `held-<pid>-<runId>` (an
-// admission marker, display-only). Nothing is ever renamed, rewritten, or
+// the NAMES of zero-byte files: `ticket-<num>-<pid>-<seq>-<runId>` (a queue
+// position), `choosing-<pid>-<seq>-<runId>` (a doorway announcement), and
+// `held-<pid>-<seq>-<runId>` (an admission marker, display-only); `seq` is a
+// per-process counter so even a duplicated runId never collides on a name. Nothing is ever renamed, rewritten, or
 // restored, and non-owners delete ONLY files whose name-embedded pid is dead —
 // so a file's path IS its identity and a deadness verdict can never be applied
 // to the wrong claim. There is no heartbeat and no staleness clock: pid
@@ -43,9 +44,11 @@ interface SlotInfo {
   runId: string;
 }
 
-const TICKET_RE = /^ticket-(\d{10})-(\d+)-(.+)$/;
-const CHOOSING_RE = /^choosing-(\d+)-(.+)$/;
-const HELD_RE = /^held-(\d+)-(.+)$/;
+// Numbers are zero-padded to 10 for readability but matched at ANY width, so a
+// ticket that outgrows the padding is still visible to every observer.
+const TICKET_RE = /^ticket-(\d+)-(\d+)-(\d+)-(.+)$/; // num, pid, seq, runId
+const CHOOSING_RE = /^choosing-(\d+)-(\d+)-(.+)$/; // pid, seq, runId
+const HELD_RE = /^held-(\d+)-(\d+)-(.+)$/; // pid, seq, runId
 
 function locksDir(scope: string): string {
   const safe = scope.replace(/[^a-zA-Z0-9_-]+/g, '_');
@@ -77,7 +80,11 @@ function touchNew(p: string): void {
   fs.closeSync(fs.openSync(p, 'wx'));
 }
 
-interface Ticket { name: string; num: number; pid: number; runId: string; }
+interface Ticket { name: string; num: number; pid: number; seq: number; runId: string; }
+
+// Per-process disambiguator: the same (pid, runId) acquiring twice — or a
+// re-entry after a vanished ticket — always gets fresh, collision-free names.
+let seqCounter = 0;
 
 /**
  * One pass over the scope dir: collect live choosing announcements and live
@@ -100,7 +107,7 @@ function gcAndList(dir: string): { choosing: string[]; tickets: Ticket[] } {
     }
     m = TICKET_RE.exec(f);
     if (m) {
-      const t: Ticket = { name: f, num: Number(m[1]), pid: Number(m[2]), runId: m[3] ?? '' };
+      const t: Ticket = { name: f, num: Number(m[1]), pid: Number(m[2]), seq: Number(m[3]), runId: m[4] ?? '' };
       if (pidAlive(t.pid)) tickets.push(t);
       else rmQuiet(path.join(dir, f));
       continue;
@@ -108,8 +115,11 @@ function gcAndList(dir: string): { choosing: string[]; tickets: Ticket[] } {
     m = HELD_RE.exec(f);
     if (m && !pidAlive(Number(m[1]))) rmQuiet(path.join(dir, f));
   }
-  // Total order: ticket number, then runId — every observer computes the same ranking.
-  tickets.sort((a, b) => (a.num - b.num) || (a.runId < b.runId ? -1 : a.runId > b.runId ? 1 : 0));
+  // TOTAL order: numeric ticket number, then the full FILENAME. runIds are
+  // random and can collide across projects sharing one scope; the filename
+  // (which also embeds pid and seq) is unique, so no two tickets ever compare
+  // equal and every observer computes the identical ranking.
+  tickets.sort((a, b) => (a.num - b.num) || (a.name < b.name ? -1 : 1));
   return { choosing, tickets };
 }
 
@@ -121,14 +131,15 @@ function gcAndList(dir: string): { choosing: string[]; tickets: Ticket[] } {
  * deterministically by runId).
  */
 function chooseTicket(dir: string, runId: string): Ticket {
-  const choosingPath = path.join(dir, `choosing-${process.pid}-${runId}`);
+  const seq = ++seqCounter;
+  const choosingPath = path.join(dir, `choosing-${process.pid}-${seq}-${runId}`);
   touchNew(choosingPath);
   try {
     const { tickets } = gcAndList(dir);
     const num = 1 + tickets.reduce((m, t) => Math.max(m, t.num), 0);
-    const name = `ticket-${String(num).padStart(10, '0')}-${process.pid}-${runId}`;
+    const name = `ticket-${String(num).padStart(10, '0')}-${process.pid}-${seq}-${runId}`;
     touchNew(path.join(dir, name));
-    return { name, num, pid: process.pid, runId };
+    return { name, num, pid: process.pid, seq, runId };
   } finally {
     rmQuiet(choosingPath);
   }
@@ -162,7 +173,7 @@ export async function acquireSlot(scope: string, opts: AcquireOpts): Promise<Slo
   for (;;) {
     const { choosing, tickets } = gcAndList(dir);
     // Doorway wait: while any LIVE peer is mid-choosing the order is not decidable.
-    if (!choosing.some((c) => c !== `choosing-${process.pid}-${runId}`)) {
+    if (!choosing.some((c) => c !== `choosing-${process.pid}-${mine.seq}-${runId}`)) {
       const idx = tickets.findIndex((t) => t.name === mine.name);
       if (idx === -1) {
         // Our ticket vanished (only possible through outside interference —
@@ -173,8 +184,8 @@ export async function acquireSlot(scope: string, opts: AcquireOpts): Promise<Slo
       if (idx < opts.limit) {
         // Admitted by rank. The held marker is DISPLAY-ONLY state for
         // scopeOccupancy — admission is decided by the ticket order alone.
-        const heldPath = path.join(dir, `held-${process.pid}-${runId}`);
-        try { touchNew(heldPath); } catch { /* leftover from an identical crashed runId — display-only */ }
+        const heldPath = path.join(dir, `held-${process.pid}-${mine.seq}-${runId}`);
+        try { touchNew(heldPath); } catch { /* display-only marker — never load-bearing */ }
         return {
           slot: mine.num,
           waitedMs: Date.now() - started,
@@ -202,15 +213,24 @@ export function scopeOccupancy(scope: string): { held: number; holders: SlotInfo
   const dir = locksDir(scope);
   let names: string[] = [];
   try { names = fs.readdirSync(dir); } catch { return { held: 0, holders: [] }; }
+  // A marker counts only while its ticket is still on disk with a live pid: a
+  // crashed holder's marker (ticket GCed, pid possibly still zombie-alive) or a
+  // marker whose release lost an rm race is display noise, not a holder.
+  const liveTickets = new Set<string>();
+  for (const f of names) {
+    const t = TICKET_RE.exec(f);
+    if (t && pidAlive(Number(t[2]))) liveTickets.add(`${t[2]}-${t[3]}-${t[4]}`);
+  }
   const holders: SlotInfo[] = [];
   for (const f of names) {
     const m = HELD_RE.exec(f);
     if (!m) continue;
     const pid = Number(m[1]);
     if (!pidAlive(pid)) continue; // stale marker of a crashed holder; GCed by the next acquirer
+    if (!liveTickets.has(`${m[1]}-${m[2]}-${m[3]}`)) continue;
     let ts = 0;
     try { ts = Math.round(fs.statSync(path.join(dir, f)).mtimeMs); } catch { /* racing a release */ }
-    holders.push({ pid, ts, runId: m[2] ?? '' });
+    holders.push({ pid, ts, runId: m[3] ?? '' });
   }
   return { held: holders.length, holders };
 }

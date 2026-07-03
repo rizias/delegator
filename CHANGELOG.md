@@ -20,6 +20,9 @@ All notable changes to Delegator are documented here. This project adheres to
   indefinitely (visible in `dlg queue`), a crashed holder is collected on the next poll, and a
   queue timeout still ends the run as `rejected`. Lock files of the old format are ignored;
   mixed old/new versions do not share a limit during the upgrade window.
+  The ranking is total even for colliding run ids (final tiebreak: the unique lock filename), and
+  every lock name carries a per-process sequence number, so a duplicated run id can never collide
+  on a name or split the order.
 - **Workspace patches no longer mangle backslashes in file bodies.** For non-git workers (e.g.
   opencode), the `git diff --no-index` pipeline normalized `\` → `/` across the ENTIRE patch text,
   so delivered code lost every backslash — regexes (`re.compile(r'\d+')`), escape sequences (`\n`,
