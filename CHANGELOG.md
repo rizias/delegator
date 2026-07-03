@@ -6,6 +6,15 @@ All notable changes to Delegator are documented here. This project adheres to
 
 ## [Unreleased]
 
+### Fixed
+- **Workspace patches no longer mangle backslashes in file bodies.** For non-git workers (e.g.
+  opencode), the `git diff --no-index` pipeline normalized `\` → `/` across the ENTIRE patch text,
+  so delivered code lost every backslash — regexes (`re.compile(r'\d+')`), escape sequences (`\n`,
+  `"a\\b"`), and Windows paths arrived corrupted while the run still reported `completed`. Path
+  normalization is now confined to diff **headers**; hunk bodies (and the `\ No newline at end of
+  file` marker) are preserved byte-for-byte. Header rewriting is hunk-aware, so a body line that
+  looks like a header (a removed `-- foo` printing as `--- foo`) is no longer misrewritten.
+
 ## [0.4.0] — 2026-07-02
 
 ### Added

@@ -232,11 +232,24 @@ function rewriteWorkspacePatchPaths(patch: string, pristine: string, workspace: 
     }
     return rewritten;
   };
-  return normalizeDiffPath(patch)
+  // Only file-header lines carry paths and may be rewritten. Hunk bodies (context/+/-,
+  // and the `\ No newline at end of file` marker) are content and must survive byte-for-byte
+  // — critically, their backslashes (regexes, Windows paths, escape sequences). A body line
+  // can masquerade as a header (a removed `-- foo` prints as `--- foo`; an added `++ foo` as
+  // `+++ foo`), so header rewriting is confined to the file-header zone that precedes the
+  // first `@@` of each file section. `inHunk` tracks that zone; do NOT normalize the whole
+  // patch text (that was the bug that mangled every backslash in delivered code).
+  let inHunk = false;
+  return patch
     .split('\n')
     .map((line) => {
       const diff = line.match(/^diff --git (.+) (.+)$/);
-      if (diff) return `diff --git ${rewriteToken(diff[1]!)} ${rewriteToken(diff[2]!)}`;
+      if (diff) {
+        inHunk = false; // a new file section reopens the header zone
+        return `diff --git ${rewriteToken(diff[1]!)} ${rewriteToken(diff[2]!)}`;
+      }
+      if (line.startsWith('@@ ')) { inHunk = true; return line; }
+      if (inHunk) return line; // hunk body — never touched
       const fileHeader = line.match(/^(---|\+\+\+) (.+)$/);
       if (fileHeader) return `${fileHeader[1]!} ${rewriteToken(fileHeader[2]!)}`;
       const moveHeader = line.match(/^((?:rename|copy) (?:from|to)) (.+)$/);
