@@ -2,7 +2,7 @@
 name: delegator
 description: Dispatch well-specified coding tasks to a separate-pool worker via the delegator CLI (dlg) instead of burning your own tokens. Use when the user says "delegator", "delegate this", "hand it to a worker", asks to save tokens on a mechanical or standard coding task, or a well-specified task needs no conversation context. Do not use for trivial one-off edits, tasks needing conversation context, or security-sensitive code.
 metadata:
-  delegator-skill-version: "2026-07-02T18:00:00Z"
+  delegator-skill-version: "2026-07-03T08:48:55Z"
 ---
 
 # delegator — for a Codex orchestrator
@@ -113,8 +113,8 @@ length). `--aggregate <model>` is for headless runs only; never interactively.
 
 - **When:** open-ended tasks with no oracle (design, review, analysis, research). NOT mechanical coding
   (one worker), NOT short-form writing (synthesis bloats tight prose). ~4x pool tokens vs one model.
-- **Models:** 2–4 DIFFERENT strong families, per task (diversity = different families; no temperature
-  through harnesses). `card.goodFor` is an optional hint; avoid weak members (they drag the aggregate down).
+- **Models:** 2–4 DIFFERENT strong families, per task (diversity = different families; self-ensembling
+  one model adds nothing measurable — 2026-07-03 evals). `card.goodFor` is an optional hint; avoid weak members (they drag the aggregate down).
 - **No config.** Flags: `--budget` (per worker), `--min-proposers` (default 2). Fewer usable answers →
   `quorumMet: false`, `stopReason: degraded` (a single opinion, not a council) — report it honestly.
 - **`--cwd` = the code the council sees.** For a code review point it at the project root so each worker

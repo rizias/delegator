@@ -6,6 +6,17 @@ All notable changes to Delegator are documented here. This project adheres to
 
 ## [Unreleased]
 
+### Documentation
+- **Council guidance now states the measured reason for mixed-model composition.** The earlier
+  claim that "sampling temperature is not available through harnesses" was wrong as stated
+  (opencode exposes a per-agent `temperature`; a direct-api runtime can carry one) — and beside
+  the point: side-by-side evals (2026-07-03) show that self-ensembling ONE model — repeat
+  sampling with or without a temperature dial, restyled sample prompts, or a critique-then-refine
+  aggregator — gains nothing an independent judge can reliably distinguish from a single call,
+  while a council of DIFFERENT strong families beats the single model 8/10 with a stable judge.
+  MODEL-GUIDE, the council spec docs, and the delegator host skills now carry the measured
+  rationale instead of the availability claim.
+
 ### Fixed
 - **The cross-process concurrency gate was rewritten as a write-once "bakery" queue and can no
   longer over-admit workers past its limit.** The previous gate arbitrated reused slot files

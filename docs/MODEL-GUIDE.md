@@ -105,8 +105,10 @@ When a task is open-ended with no test/oracle (design decisions, reviews, analys
 returns every answer plus a synthesis `bundle`; the orchestrator writes the final (or a headless caller
 passes `--aggregate <model>`). In practice it beats the strongest single model on judgment tasks but
 LOSES on short-form writing (synthesis bloats tight prose), at ~4x the worker-pool tokens. Diversity
-comes from different families — sampling temperature is not available through harnesses; a weak member
-drags the aggregate down. Not for mechanical coding — that is one worker. Full envelope: [USAGE.md](USAGE.md).
+comes from different families — self-ensembling ONE model (repeat sampling, with or without a
+temperature dial, prompt or aggregation tricks) showed no judge-distinguishable gain over a single
+call in measured evals (2026-07-03); a weak member drags the aggregate down. Not for mechanical
+coding — that is one worker. Full envelope: [USAGE.md](USAGE.md).
 
 ## 3. The pool rule — shared vs separate pools
 

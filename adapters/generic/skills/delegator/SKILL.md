@@ -2,7 +2,7 @@
 name: delegator
 description: Dispatch well-specified coding tasks to a separate-pool worker via the delegator CLI (dlg) instead of burning your own tokens. Use when the user says "delegator", "delegate this", "hand it to a worker", asks to save tokens on a mechanical or standard coding task, or a well-specified task needs no conversation context. Do not use for trivial one-off edits, tasks needing conversation context, or security-sensitive code.
 metadata:
-  delegator-skill-version: "2026-07-02T18:00:00Z"
+  delegator-skill-version: "2026-07-03T08:48:55Z"
 ---
 
 # Delegator — dispatch work to a separate-pool worker
@@ -137,7 +137,7 @@ it interactively — a same-family aggregator is a redundant pass.
   writing (a 15-line quickstart, a ≤120-word blurb): synthesis bloats tight prose. Expect ~4x worker-pool
   tokens per task versus one model.
 - **Picking models:** YOU decide, per task — 2–4 DIFFERENT strong families (diversity comes from different
-  families; sampling temperature is not available through harnesses). A model's `card.goodFor` in
+  families; self-ensembling one model adds nothing measurable — 2026-07-03 evals). A model's `card.goodFor` in
   providers.yaml is a hint when present — it may be absent entirely, which is fine and never blocks you;
   judge fit yourself, ask the user only at a genuine fork. Avoid weak models: a weak member drags the
   aggregate DOWN (quality beats diversity).
