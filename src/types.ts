@@ -274,6 +274,10 @@ export interface WorkerEvent {
    *  is truncated for the log, so the summary reads this instead of re-parsing a clipped
    *  line and silently losing a long final message. */
   text?: string;
+  /** The line was fabricated LOCALLY by the worker CLI (e.g. claude's `<synthetic>` notices) and
+   *  never reached the provider — it carries no provider verdict, so failure classification must
+   *  skip it (a stray "unauthorized" in such a notice must not trip the auth breaker). */
+  synthetic?: boolean;
   /** file_change paths extracted from the FULL line at parse time. `raw` is truncated for the
    *  log, so the sandbox-escape check reads these instead of re-parsing a clipped line — a long
    *  file_change would otherwise re-parse to [] and FALSELY report the run as confined. */

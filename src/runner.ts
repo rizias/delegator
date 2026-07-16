@@ -153,9 +153,12 @@ interface KillInfo {
 
 /** All of the worker's output (both streams), tail-bounded, for failure classification.
  *  Provider errors land on stdout (claude's stream-json result) OR stderr (codex),
- *  and codex tags some stderr as `noise` — so we scan every line, not just non-noise. */
-function failureText(events: WorkerEvent[]): string {
-  const joined = events.map((e) => e.raw).join('\n');
+ *  and codex tags some stderr and even its error items as `noise` — so we scan every
+ *  line, including noise. The ONE exclusion is `synthetic` events: lines the worker CLI
+ *  fabricated locally (claude's `<synthetic>` notices) never reached the provider, so a
+ *  stray "unauthorized" in them must not be classified as a provider auth failure. */
+export function failureText(events: WorkerEvent[]): string {
+  const joined = events.filter((e) => !e.synthetic).map((e) => e.raw).join('\n');
   return tailOf(joined, 12000);
 }
 

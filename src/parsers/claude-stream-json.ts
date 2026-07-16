@@ -29,7 +29,18 @@ export const claudeStreamJsonParser: ParserPreset = {
       if (type === 'assistant') {
         const nested = obj['parent_tool_use_id'] !== undefined && obj['parent_tool_use_id'] !== null;
         const text = extractAssistantText(obj);
-        return { ts: Date.now(), stream, kind: nested ? 'output' : 'turn', raw, ...(text ? { text } : {}) };
+        // A synthetic message (message.model === '<synthetic>') is injected LOCALLY by the claude
+        // CLI — a permission/limit/interrupt notice with zero provider tokens, not a model turn and
+        // not a provider verdict. Mark it 'noise' so it neither counts as a turn nor feeds failure
+        // classification: a stray "unauthorized"/"forbidden" in that notice must not trip the auth breaker.
+        const message = obj['message'] as Record<string, unknown> | undefined;
+        const synthetic = message?.['model'] === '<synthetic>';
+        const kind: WorkerEvent['kind'] = synthetic ? 'noise' : nested ? 'output' : 'turn';
+        return {
+          ts: Date.now(), stream, kind, raw,
+          ...(synthetic ? { synthetic: true } : {}),
+          ...(text ? { text } : {}),
+        };
       }
 
       if (type === 'result') {
@@ -140,6 +151,12 @@ export function lastAssistantText(events: WorkerEvent[]): string {
     } catch {
       // keep scanning
     }
+  }
+  // No real turn: a synthetic notice (excluded from turns and classification) may still be
+  // the only human-readable explanation of why claude stopped — surface it in the summary.
+  for (let i = events.length - 1; i >= 0; i--) {
+    const ev = events[i]!;
+    if (ev.synthetic && ev.text) return ev.text.slice(0, 4000);
   }
   return '';
 }

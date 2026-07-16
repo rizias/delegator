@@ -6,6 +6,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { descriptorToAdapter } from '../dist/runtimes/factory.js';
 import { mergedRuntimeDescriptors } from '../dist/config.js';
+import { failureText } from '../dist/runner.js';
+import { classifyFailure } from '../dist/classify.js';
 
 process.env.DELEGATOR_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'dlg-claude-runtime-'));
 const claudeRuntime = descriptorToAdapter('claude', mergedRuntimeDescriptors({}).claude);
@@ -20,6 +22,56 @@ test('sub-agent assistant message (parent_tool_use_id) does NOT count as a turn'
   const line = JSON.stringify({ type: 'assistant', parent_tool_use_id: 'toolu_123', message: { content: [] } });
   const ev = claudeRuntime.parseLine(line, 'stdout');
   assert.equal(ev.kind, 'output');
+});
+
+test('a synthetic claude message is noise, not a turn (locally injected CLI notice, no provider round-trip)', () => {
+  const line = JSON.stringify({
+    type: 'assistant',
+    message: { model: '<synthetic>', content: [{ type: 'text', text: 'You are not authorized. 403 Forbidden.' }] },
+    usage: { input_tokens: 0, output_tokens: 0 },
+  });
+  const ev = claudeRuntime.parseLine(line, 'stdout');
+  assert.equal(ev.kind, 'noise', 'synthetic message must be noise, never a turn');
+  assert.equal(ev.synthetic, true, 'synthetic flag must be set for failureText to exclude it');
+});
+
+test('failureText still scans NON-synthetic noise (codex tags error items noise — they must classify)', () => {
+  // failureText must exclude ONLY synthetic events. Codex marks its error items and some stderr
+  // as 'noise', and those are exactly where its provider errors (429/5xx) surface — filtering
+  // all noise would silently kill codex failure classification (retry/fallover/breaker).
+  const codexNoise = { ts: 1, stream: 'stdout', kind: 'noise', raw: '{"type":"item.completed","item":{"item_type":"error","message":"429 too many requests"}}' };
+  assert.equal(classifyFailure(failureText([codexNoise]))?.class, 'rate-limit', 'non-synthetic noise must still classify');
+});
+
+test('a synthetic notice still surfaces in finalSummary when it is the only explanation', () => {
+  // The notice is excluded from turns and classification, but it is often the ONE human-readable
+  // line saying why claude stopped (usage limit, permission, interrupt) — the summary must keep it.
+  const notice = claudeRuntime.parseLine(JSON.stringify({
+    type: 'assistant',
+    message: { model: '<synthetic>', content: [{ type: 'text', text: 'Usage limit reached.' }] },
+  }), 'stdout');
+  const errResult = claudeRuntime.parseLine(JSON.stringify({ type: 'result', is_error: true, subtype: 'error_during_execution' }), 'stdout');
+  assert.match(claudeRuntime.finalSummary('', [notice, errResult]), /Usage limit reached\./, 'error summary must carry the notice');
+  assert.match(claudeRuntime.finalSummary('', [notice]), /Usage limit reached\./, 'no-result fallback must carry the notice');
+});
+
+test('a synthetic auth-looking notice does NOT classify as a provider failure (no false breaker trip)', () => {
+  // Regression: a `<synthetic>` notice carrying "unauthorized/401" once matched AUTH_RE and opened
+  // the circuit breaker for 10 min on the main subscription worker — from a message that never hit
+  // the API. failureText must drop it (it is 'noise'), so classifyFailure sees nothing provider-shaped.
+  const synthetic = claudeRuntime.parseLine(JSON.stringify({
+    type: 'assistant',
+    message: { model: '<synthetic>', content: [{ type: 'text', text: 'unauthorized: 401' }] },
+    usage: { input_tokens: 0, output_tokens: 0 },
+  }), 'stdout');
+  assert.equal(classifyFailure(failureText([synthetic])), null, 'synthetic notice must not trip auth');
+
+  // Control: a genuine (non-synthetic) 401 still classifies as auth — the fix scopes to synthetic only.
+  const real = claudeRuntime.parseLine(JSON.stringify({
+    type: 'assistant',
+    message: { model: 'claude-haiku-4-5', content: [{ type: 'text', text: 'authentication_error: 401' }] },
+  }), 'stdout');
+  assert.equal(classifyFailure(failureText([real]))?.class, 'auth', 'a genuine 401 still classifies as auth');
 });
 
 test('result event carries token usage', () => {
