@@ -87,7 +87,8 @@ fanning out; workers never spawn workers. Never read `secrets.yaml`; never copy 
 
 Self-review counts as delegation too: if you would spawn several agents to review or analyse your
 own work, prefer separate-pool workers when practical — one `dlg run` per review angle, or
-`dlg council` for independent full passes; the usual fan-out discipline applies.
+`dlg council` to cross-check the same review across different models; the usual fan-out
+discipline applies.
 
 Cheap-worker discipline: small self-contained units (state classes, DTOs, tests, simple hooks,
 mechanical edits) — never large cross-system integration. Ask for the smallest COMPILABLE patch
