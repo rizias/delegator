@@ -156,9 +156,18 @@ interface KillInfo {
  *  and codex tags some stderr and even its error items as `noise` — so we scan every
  *  line, including noise. The ONE exclusion is `synthetic` events: lines the worker CLI
  *  fabricated locally (claude's `<synthetic>` notices) never reached the provider, so a
- *  stray "unauthorized" in them must not be classified as a provider auth failure. */
+ *  stray "unauthorized" in them must not be classified as a provider auth failure. The
+ *  claude CLI also MIRRORS that notice text into its terminal result line verbatim, so a
+ *  result whose resultText equals a synthetic notice is dropped too — a REAL provider
+ *  failure still classifies via the CLI's api_error/system lines, which are not synthetic. */
 export function failureText(events: WorkerEvent[]): string {
-  const joined = events.filter((e) => !e.synthetic).map((e) => e.raw).join('\n');
+  const syntheticTexts = new Set(
+    events.filter((e) => e.synthetic && e.text).map((e) => e.text as string),
+  );
+  const joined = events
+    .filter((e) => !e.synthetic)
+    .filter((e) => !(e.kind === 'result' && e.resultText !== undefined && syntheticTexts.has(e.resultText)))
+    .map((e) => e.raw).join('\n');
   return tailOf(joined, 12000);
 }
 

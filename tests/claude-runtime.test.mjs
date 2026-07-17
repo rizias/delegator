@@ -43,6 +43,26 @@ test('failureText still scans NON-synthetic noise (codex tags error items noise 
   assert.equal(classifyFailure(failureText([codexNoise]))?.class, 'rate-limit', 'non-synthetic noise must still classify');
 });
 
+test('a result line MIRRORING a synthetic notice does not classify either (real CLI behavior)', () => {
+  // Observed live: claude emits the synthetic notice AND repeats its text verbatim in the
+  // terminal result line. Filtering only the assistant line left the mirror classifiable.
+  const noticeText = 'API Error: unauthorized 401';
+  const synthetic = claudeRuntime.parseLine(JSON.stringify({
+    type: 'assistant',
+    message: { model: '<synthetic>', content: [{ type: 'text', text: noticeText }] },
+  }), 'stdout');
+  const mirror = claudeRuntime.parseLine(JSON.stringify({
+    type: 'result', subtype: 'success', is_error: true, result: noticeText,
+  }), 'stdout');
+  assert.equal(classifyFailure(failureText([synthetic, mirror])), null, 'the mirrored result must not classify');
+
+  // Control: a result with its OWN provider error text (not a mirror) still classifies.
+  const realErr = claudeRuntime.parseLine(JSON.stringify({
+    type: 'result', is_error: true, result: 'authentication_error: 401',
+  }), 'stdout');
+  assert.equal(classifyFailure(failureText([synthetic, realErr]))?.class, 'auth', 'a non-mirror result still classifies');
+});
+
 test('a synthetic notice still surfaces in finalSummary when it is the only explanation', () => {
   // The notice is excluded from turns and classification, but it is often the ONE human-readable
   // line saying why claude stopped (usage limit, permission, interrupt) — the summary must keep it.
