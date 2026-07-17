@@ -2,7 +2,7 @@
 name: delegator
 description: Dispatch well-specified coding tasks to a separate-pool worker via the delegator CLI (dlg) instead of burning your own tokens. Use when the user says "delegator", "delegate this", "hand it to a worker", asks to save tokens on a mechanical or standard coding task, or a well-specified task needs no conversation context. Do not use for trivial one-off edits, tasks needing conversation context, or security-sensitive code.
 metadata:
-  delegator-skill-version: "2026-07-03T08:48:55Z"
+  delegator-skill-version: "2026-07-17T00:00:00Z"
 ---
 
 # Delegator — dispatch work to a separate-pool worker
@@ -98,6 +98,10 @@ a z.ai/GLM worker runs on the `claude` runtime yet draws on your z.ai key — a 
 *does* relieve you. Only a worker on your own subscription/login shares your pool.
 Keep ≤2–3 parallel runs; sequential work = one worker; state the batch cost before fanning out;
 workers never spawn workers. Never read `secrets.yaml`; never copy anyone's auth tokens.
+
+Self-review counts as delegation too: if you would spawn several agents to review or analyse your
+own work, prefer separate-pool workers when practical — one `dlg run` per review angle, or
+`dlg council` for independent full passes; the usual fan-out discipline applies.
 
 Cheap-worker discipline still applies: give a cheap worker small, self-contained units (state
 classes, DTOs, tests, simple hooks, mechanical edits) — never large cross-system integration. Ask

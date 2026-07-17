@@ -10,6 +10,9 @@ All notable changes to Delegator are documented here. This project adheres to
 - A local "synthetic" notice from the Claude CLI (e.g. an interrupted turn) is no longer misread as an
   authentication failure, so it can't wrongly bench a subscription worker on the circuit breaker.
 
+### Documentation
+- Host skills now advise running self-review fan-outs through separate-pool workers when practical.
+
 ## [0.4.1] — 2026-07-03
 
 ### Fixed
