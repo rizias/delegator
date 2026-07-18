@@ -60,7 +60,7 @@ function safeId(id: string): string {
   return id.replace(/[^a-zA-Z0-9_-]+/g, '_');
 }
 
-function pidAlive(pid: number): boolean {
+export function pidAlive(pid: number): boolean {
   if (pid === process.pid) return true;
   try {
     process.kill(pid, 0);

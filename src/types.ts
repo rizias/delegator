@@ -263,7 +263,9 @@ export interface RunMeta {
   runtime: RuntimeId;
   worktree: string;
   baseCommit: string;
-  pid?: number;
+  pid?: number;                  // worker child process (spawn runtimes), set when the run reaches `running`
+  ownerPid?: number;             // the delegator process that owns this run, stamped at creation — a run whose
+                                 // ownerPid is no longer alive while still non-terminal is an orphan (reaped on listing)
   endedAt?: string;
 }
 

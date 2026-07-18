@@ -14,6 +14,7 @@ import {
   dirSizeBytes,
 } from './paths.js';
 import { removeWorktree, pruneWorktreeAdmin } from './worktree.js';
+import { pidAlive } from './semaphore.js';
 import type { RunMeta, WorkerEvent, Envelope } from './types.js';
 
 // ---------- project scoping: runs are grouped per project ----------
@@ -81,7 +82,10 @@ export function newRunId(): string {
 export function createRun(meta: RunMeta, brief: string, gen: () => string = newRunId): RunMeta {
   for (let attempt = 0; attempt < 5; attempt++) {
     const id = attempt === 0 ? meta.id : gen();
-    const runMeta = id === meta.id ? meta : { ...meta, id };
+    // Stamp the owning delegator process. If that process later dies (crash, Ctrl-C, a killed
+    // council parent) before the run finalizes, `reapIfOrphaned` (below) can close the run instead
+    // of leaving it stranded in a non-terminal state forever.
+    const runMeta: RunMeta = { ...meta, id, ownerPid: meta.ownerPid ?? process.pid };
     const dir = resolveRunDir(id);
     try {
       ensureDir(path.dirname(dir));
@@ -154,6 +158,56 @@ export function writePatch(id: string, patch: string): string {
   return path.resolve(p);
 }
 
+// ---------- reaping orphans ----------
+
+/**
+ * A run whose owning delegator process is gone but that never reached a terminal state is an
+ * orphan (the process crashed / was Ctrl-C'd / a council parent was killed between `createRun`
+ * and finalize — an in-process `api` run has no worker pid to kill-detect, so this is the only
+ * signal). Close it as a terminal `failed` so it stops showing as a live/preparing zombie.
+ * Best-effort and idempotent: only fires once (state flips to `done`), never touches a run whose
+ * owner is still alive, and swallows write races with a concurrent finalize. Mutates `m` in place
+ * so a freshly-listed metas array reflects the reap without a re-read.
+ */
+function reapIfOrphaned(m: RunMeta): void {
+  if (m.state === 'done') return;
+  if (m.ownerPid === undefined) return;   // legacy run with no owner stamp — cannot judge liveness
+  if (pidAlive(m.ownerPid)) return;       // owner still running: the run is genuinely in progress
+  const skip = { status: 'skipped' as const, outputTail: 'run orphaned before verification' };
+  const endedAt = new Date().toISOString();
+  const env: Envelope = {
+    envelopeVersion: 1,
+    runId: m.id,
+    status: 'failed',
+    workerId: m.workerId,
+    model: m.model,
+    runtime: m.runtime,
+    summary: 'run orphaned: the delegator process that owned this run exited before it finished',
+    changes: { diffStat: '', filesTouched: [], applied: false },
+    verification: { build: skip, test: skip, lint: skip },
+    usage: { wallClockMs: 0 },
+    stopReason: `orphaned: owner process ${m.ownerPid} is no longer alive`,
+    errors: [{ type: 'internal', message: 'run orphaned (owner process exited before finalize)' }],
+    logsPath: eventsPath(m.id),
+    worktree: m.worktree,
+  };
+  try {
+    // Re-read fresh: a dead owner necessarily finished (or crashed through) its own writes before it
+    // exited, so if it finalized in the gap between the listing snapshot and now, the store already
+    // reflects it. Do NOT clobber a real result or its timestamps — only close a genuine orphan.
+    const fresh = readMeta(m.id);
+    if (fresh.state === 'done') { m.state = 'done'; m.endedAt = fresh.endedAt; return; }
+    if (readEnvelope(m.id)) { updateMeta(m.id, { state: 'done' }); m.state = 'done'; return; } // real result exists
+    writeEnvelope(m.id, env);
+    journalAppend(env);
+    updateMeta(m.id, { state: 'done', endedAt });
+    m.state = 'done';
+    m.endedAt = endedAt;
+  } catch {
+    // a concurrent finalize/reaper won the race, or the store is read-only — leave it.
+  }
+}
+
 // ---------- listing ----------
 
 export function listRuns(): RunMeta[] {
@@ -176,6 +230,11 @@ export function listRuns(): RunMeta[] {
       // skip corrupt entries
     }
   }
+
+  // Close any run whose owner process died before it finalized — so a dead process never leaves a
+  // run stuck showing as live/preparing. Cheap: a liveness syscall per non-terminal run, a write
+  // only for actual orphans (once).
+  for (const m of metas) reapIfOrphaned(m);
 
   metas.sort((a, b) => {
     const ta = new Date(a.createdAt).getTime();
