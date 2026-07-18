@@ -174,6 +174,10 @@ QUEUED -> PREPARING -> RUNNING <-> CHECKPOINT -> COLLECTING -> VERIFYING -> DONE
 - `COLLECTING`: gather final summary, usage, diff, and stop reason.
 - `VERIFYING`: run configured build/test/lint commands in the worker worktree.
 - `DONE`: write the envelope with status, attempts, diff, verification, usage, errors, and stop reason.
+- **Orphan reaping**: every run is stamped with its owning delegator process id at creation. If that
+  process exits before the run reaches `DONE` (crash, Ctrl-C, a killed `dlg council` parent), the next
+  run listing (`dlg status`) closes the run as `failed` (reason: orphaned) — a dead process never
+  leaves a run stuck in a non-terminal state.
 
 Terminal statuses include `completed`, `partial`, `requires-review`, `failed`, `killed-timeout`,
 `killed-no-progress`, and `rejected`.
