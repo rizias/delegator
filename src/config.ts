@@ -41,6 +41,74 @@ export class ConfigError extends Error {
   }
 }
 
+/** The mapping pair whose scalar key equals `key`, or undefined. */
+function findMapPair(map: { items: Array<{ key: unknown; value: unknown }> }, key: string): { key: unknown; value: unknown } | undefined {
+  return map.items.find((p) => isScalar(p.key) && (p.key as { value: unknown }).value === key);
+}
+
+/** The whitespace indentation of the source line that contains `offset`. */
+function indentAt(source: string, offset: number): string {
+  const lineStart = source.lastIndexOf('\n', offset - 1) + 1;
+  let i = lineStart;
+  while (i < source.length && source[i] === ' ') i += 1;
+  return source.slice(lineStart, i);
+}
+
+/**
+ * Add or remove exactly one `disabled: true` entry on `targetMap`, editing the ORIGINAL source
+ * string in place (via parsed node ranges) so every OTHER byte of the hand-maintained file is
+ * preserved. `parentMap`/`key` locate the target's own key line (to place a new block entry).
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function toggleDisabledEntry(source: string, parentMap: any, key: string, targetMap: any, disabled: boolean): string {
+  const existing = findMapPair(targetMap, 'disabled') as any;
+
+  if (disabled) {
+    if (existing) {
+      if (isScalar(existing.value) && existing.value.value === true) return source; // already parked
+      const [vs, ve] = existing.value.range;
+      return `${source.slice(0, vs)}true${source.slice(ve)}`; // normalise a hand-written `disabled: <other>`
+    }
+    if (targetMap.flow) {
+      if (targetMap.items.length === 0) {
+        return `${source.slice(0, targetMap.range[0])}{ disabled: true }${source.slice(targetMap.range[1])}`;
+      }
+      const open = targetMap.range[0];
+      const at = source[open + 1] === ' ' ? open + 2 : open + 1;
+      return `${source.slice(0, at)}disabled: true, ${source.slice(at)}`;
+    }
+    // Block mapping: insert `disabled: true` as the first child, right after the target key line.
+    const pair = findMapPair(parentMap, key) as any;
+    const nl = source.indexOf('\n', pair.key.range[1]);
+    const at = nl === -1 ? source.length : nl + 1;
+    const childIndent = targetMap.items.length
+      ? indentAt(source, targetMap.items[0].key.range[0])
+      : `${indentAt(source, pair.key.range[0])}  `;
+    const prefix = nl === -1 ? '\n' : '';
+    return `${source.slice(0, at)}${prefix}${childIndent}disabled: true\n${source.slice(at)}`;
+  }
+
+  // Enable: remove the `disabled` entry if present, otherwise leave the file untouched.
+  if (!existing) return source;
+  if (targetMap.flow) {
+    if (targetMap.items.length === 1) {
+      return `${source.slice(0, targetMap.range[0])}{}${source.slice(targetMap.range[1])}`;
+    }
+    let start = existing.key.range[0];
+    let end = existing.value ? existing.value.range[1] : existing.key.range[1];
+    const fwd = source.slice(end).match(/^\s*,\s*/);
+    const bwd = source.slice(0, start).match(/,\s*$/);
+    if (fwd) end += fwd[0].length;
+    else if (bwd) start -= bwd[0].length;
+    return source.slice(0, start) + source.slice(end);
+  }
+  const lineStart = source.lastIndexOf('\n', existing.key.range[0] - 1) + 1;
+  const valueEnd = existing.value ? existing.value.range[1] : existing.key.range[1];
+  const nl = source.indexOf('\n', valueEnd);
+  const removeEnd = nl === -1 ? source.length : nl + 1;
+  return source.slice(0, lineStart) + source.slice(removeEnd);
+}
+
 /** Park or revive one existing provider/model without rebuilding hand-maintained YAML. */
 export function updateProviderDisabled(providerId: string, modelId: string | undefined, disabled: boolean): string {
   const file = globalConfigPath();
@@ -66,15 +134,21 @@ export function updateProviderDisabled(providerId: string, modelId: string | und
   if (isAlias(provider)) throw new ConfigError(`provider "${providerId}" is an alias; refusing an ambiguous target`);
   if (!isMap(provider)) throw new ConfigError(`provider "${providerId}" is not a mapping; refusing to write`);
 
-  const targetPath = modelId === undefined ? providerPath : [...providerPath, 'models', modelId];
-  if (modelId !== undefined) {
+  let edited: string;
+
+  if (modelId === undefined) {
+    edited = toggleDisabledEntry(source, providers, providerId, provider, disabled);
+  } else {
     const modelsPath = [...providerPath, 'models'];
-    let models = doc.getIn(modelsPath, true);
+    const models = doc.getIn(modelsPath, true);
+    if (models === undefined) throw new ConfigError(`model "${modelId}" does not exist under provider "${providerId}"`);
     if (isAlias(models)) throw new ConfigError(`models for provider "${providerId}" is an alias; refusing an ambiguous target`);
 
-    // The accepted `[model-a, model-b]` shorthand cannot carry per-model fields. Convert it to
-    // the equivalent mapping once, carrying its comments onto the replacement nodes.
     if (isSeq(models)) {
+      // `[model-a, model-b]` shorthand cannot carry per-model fields — a structural change that
+      // cannot be a byte-faithful line edit. Convert via the AST (carrying comments) and re-serialize;
+      // this is the one path that may reflow, and it only triggers for shorthand model lists.
+      if (!disabled) return file; // nothing is disabled inside a shorthand list
       const sequence = models;
       if (sequence.items.some(isAlias)) throw new ConfigError(`models for provider "${providerId}" contains an alias; refusing an ambiguous target`);
       if (!sequence.items.every((item) => isScalar(item) && typeof item.value === 'string')) {
@@ -98,31 +172,35 @@ export function updateProviderDisabled(providerId: string, modelId: string | und
         }
       });
       doc.setIn(modelsPath, replacement);
-      models = replacement;
-    }
-
-    if (!isMap(models)) throw new ConfigError(`provider "${providerId}" has no model mapping`);
-    const model = doc.getIn(targetPath, true);
-    if (model === undefined) throw new ConfigError(`model "${modelId}" does not exist under provider "${providerId}"`);
-    if (isAlias(model)) throw new ConfigError(`model "${providerId}/${modelId}" is an alias; refusing an ambiguous target`);
-    if (!isMap(model)) {
-      if (!isScalar(model) || model.value !== null) {
+      doc.setIn([...modelsPath, modelId, 'disabled'], true);
+      edited = doc.toString({ lineWidth: 0 });
+    } else if (isMap(models)) {
+      const model = doc.getIn([...modelsPath, modelId], true);
+      if (model === undefined) throw new ConfigError(`model "${modelId}" does not exist under provider "${providerId}"`);
+      if (isAlias(model)) throw new ConfigError(`model "${providerId}/${modelId}" is an alias; refusing an ambiguous target`);
+      if (isMap(model)) {
+        edited = toggleDisabledEntry(source, models, modelId, model, disabled);
+      } else if (isScalar(model) && model.value === null) {
+        if (!disabled) return file; // a bare `model:` carries no fields to remove
+        const pair = findMapPair(models as any, modelId) as any;
+        const nl = source.indexOf('\n', pair.key.range[1]);
+        const at = nl === -1 ? source.length : nl + 1;
+        const childIndent = `${indentAt(source, pair.key.range[0])}  `;
+        const prefix = nl === -1 ? '\n' : '';
+        edited = `${source.slice(0, at)}${prefix}${childIndent}disabled: true\n${source.slice(at)}`;
+      } else {
         throw new ConfigError(`model "${providerId}/${modelId}" is not a mapping; refusing to write`);
       }
-      const replacement = doc.createNode({});
-      replacement.commentBefore = model.commentBefore;
-      replacement.comment = model.comment;
-      replacement.spaceBefore = model.spaceBefore;
-      doc.setIn(targetPath, replacement);
+    } else {
+      throw new ConfigError(`provider "${providerId}" has no model mapping`);
     }
   }
 
-  if (disabled) doc.setIn([...targetPath, 'disabled'], true);
-  else doc.deleteIn([...targetPath, 'disabled']);
+  if (edited === source) return file; // already in the requested state — leave the file byte-for-byte
 
   const tmp = path.join(path.dirname(file), `.${path.basename(file)}.${process.pid}.${Date.now()}.tmp`);
   try {
-    fs.writeFileSync(tmp, doc.toString(), { encoding: 'utf8', flag: 'wx', mode: fs.statSync(file).mode });
+    fs.writeFileSync(tmp, edited, { encoding: 'utf8', flag: 'wx', mode: fs.statSync(file).mode });
     fs.renameSync(tmp, file);
   } finally {
     if (fs.existsSync(tmp)) fs.unlinkSync(tmp);
