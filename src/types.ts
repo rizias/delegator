@@ -32,6 +32,7 @@ export interface BudgetSpec {
 
 export interface ProviderConfig {
   kind: 'anthropic' | 'anthropic-compatible' | 'openai-compatible' | 'codex-cli' | 'opencode';
+  disabled?: true;
   protocol?: ProviderProtocol;
   auth?: ProviderAuth;
   baseUrl?: string;
@@ -105,6 +106,7 @@ export interface ModelCatalogDescriptor {
 }
 
 export interface ModelConfig {
+  disabled?: true;
   card?: WorkerCard;
   budget?: Partial<BudgetSpec>;
   fallback?: string | string[];
@@ -214,7 +216,7 @@ export interface RestrictSpec {
 
 // ---------- discovery ----------
 
-export type WorkerStatus = 'available' | 'degraded' | 'unavailable' | 'unconfigured' | 'restricted';
+export type WorkerStatus = 'available' | 'degraded' | 'unavailable' | 'unconfigured' | 'restricted' | 'disabled';
 
 export interface WorkerInfo {
   id: string;

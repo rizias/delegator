@@ -6,6 +6,9 @@ All notable changes to Delegator are documented here. This project adheres to
 
 ## [Unreleased]
 
+### Added
+- Providers and individual models can now be parked and later revived without deleting their configuration or comments.
+
 ### Fixed
 - A local "synthetic" notice from the Claude CLI (e.g. an interrupted turn) is no longer misread as an
   authentication failure, so it can't wrongly bench a subscription worker on the circuit breaker.

@@ -10,7 +10,7 @@ import { Command } from 'commander';
 import { stringify as stringifyYaml } from 'yaml';
 import type { CouncilEnvelope, CouncilModelRef, Envelope, Policy, ReasoningEffort } from './types.js';
 import { globalConfigPath, runsJournalPath, tailOf, updateCheckPath, dirSizeBytes } from './paths.js';
-import { ConfigError, loadConfig, loadSecretPools, parseDuration, saveSecret } from './config.js';
+import { ConfigError, loadConfig, loadSecretPools, parseDuration, saveSecret, updateProviderDisabled } from './config.js';
 import { listWorkers, resolveRunPlan, buildPlanView, type PlanView } from './registry.js';
 import { buildComparison, type ComparisonView } from './compare.js';
 import { fetchProviderModels } from './models.js';
@@ -286,7 +286,9 @@ defineCommand('models [provider]')
   .action(async (provider: string | undefined, opts: { filter?: string; cwd: string; json?: boolean }) => {
     try {
       const cfg = loadConfig(opts.cwd);
-      const ids = provider ? [provider] : Object.keys(cfg.providers);
+      const ids = provider
+        ? [provider]
+        : Object.entries(cfg.providers).filter(([, p]) => p.disabled !== true).map(([id]) => id);
       const results: Array<{ provider: string; kind: string; note?: string; models: string[] }> = [];
       for (const pid of ids) {
         const r = await fetchProviderModels(pid, cfg);
@@ -339,7 +341,8 @@ defineCommand('doctor')
         workers: {
           available: doctorLoad.available,
           total: doctorLoad.infos.length,
-          unavailable: doctorLoad.infos.filter((i) => i.status !== 'available'),
+          disabled: doctorLoad.infos.filter((i) => i.status === 'disabled'),
+          unavailable: doctorLoad.infos.filter((i) => i.status !== 'available' && i.status !== 'disabled'),
         },
       } : {}),
       ...(configError ? { configError } : {}),
@@ -357,12 +360,34 @@ defineCommand('doctor')
       if (doctorLoad) {
         for (const w of doctorLoad.warnings) console.log(`warning: ${w}`);
         console.log(`workers: ${doctorLoad.available}/${doctorLoad.infos.length} available`);
-        for (const w of doctorLoad.infos.filter((i) => i.status !== 'available')) console.log(`  ${w.id}: ${w.status} — ${w.reason ?? ''}`);
+        for (const w of doctorLoad.infos.filter((i) => i.status === 'disabled')) console.log(`  ${w.id}: disabled — ${w.reason ?? ''}`);
+        for (const w of doctorLoad.infos.filter((i) => i.status !== 'available' && i.status !== 'disabled')) console.log(`  ${w.id}: ${w.status} — ${w.reason ?? ''}`);
       } else {
         console.log(`config not loadable: ${configError}`);
       }
     }, opts.json);
   });
+
+const providerCmd = program.command('provider')
+  .description('park or revive an existing provider or model in providers.yaml');
+
+for (const action of ['disable', 'enable'] as const) {
+  providerCmd
+    .command(`${action} <provider> [model]`)
+    .description(`${action} an existing provider or model without removing its config`)
+    .option('--json', 'output machine-readable JSON')
+    .action((provider: string, model: string | undefined, opts: { json?: boolean }) => {
+      try {
+        const configPath = updateProviderDisabled(provider, model, action === 'disable');
+        const target = model ? `model "${provider}/${model}"` : `provider "${provider}"`;
+        emit({ action: action === 'disable' ? 'disabled' : 'enabled', provider, ...(model ? { model } : {}), configPath }, () => {
+          console.log(action === 'disable'
+            ? `${target} disabled; it remains in providers.yaml but will not receive work.`
+            : `${target} enabled; it is eligible for work again (existing health state is unchanged).`);
+        }, opts.json);
+      } catch (e) { fail(e); }
+    });
+}
 
 // A plain program.command (not defineCommand): the `key` group has no action of its own, and adding
 // `--json` here would shadow the same flag on its set/add/list subcommands (a duplicate parent option
@@ -878,18 +903,10 @@ defineCommand('queue')
   .action((opts: { json?: boolean }) => {
     try {
       const cfg = loadConfig(process.cwd());
-      const scopes = new Map<string, number>();
-      for (const p of Object.values(cfg.providers)) {
-        const scope = p.concurrencyGroup ?? '';
-        const limit = p.maxConcurrent ?? 0;
-        if (limit > 0) {
-          const key = p.concurrencyGroup ?? '(per-provider)';
-          scopes.set(key, Math.max(scopes.get(key) ?? 0, limit));
-        }
-      }
+      const providers = Object.entries(cfg.providers).filter(([, p]) => p.disabled !== true);
       const rows: Array<{ scope: string; held: number; limit: number; shared: boolean }> = [];
       // Per-provider scopes (no group): scope name == provider id.
-      for (const [pid, p] of Object.entries(cfg.providers)) {
+      for (const [pid, p] of providers) {
         const limit = p.maxConcurrent ?? 0;
         if (limit > 0 && !p.concurrencyGroup) {
           const occ = scopeOccupancy(pid);
@@ -897,9 +914,9 @@ defineCommand('queue')
         }
       }
       // Grouped scopes.
-      const groups = new Set(Object.values(cfg.providers).map((p) => p.concurrencyGroup).filter(Boolean) as string[]);
+      const groups = new Set(providers.map(([, p]) => p.concurrencyGroup).filter(Boolean) as string[]);
       for (const g of groups) {
-        const limit = Math.min(...Object.values(cfg.providers).filter((p) => p.concurrencyGroup === g).map((p) => p.maxConcurrent ?? 0).filter((n) => n > 0));
+        const limit = Math.min(...providers.filter(([, p]) => p.concurrencyGroup === g).map(([, p]) => p.maxConcurrent ?? 0).filter((n) => n > 0));
         const occ = scopeOccupancy(g);
         rows.push({ scope: g, held: occ.held, limit, shared: true });
       }
@@ -908,7 +925,7 @@ defineCommand('queue')
           if (row.shared) console.log(`${row.scope.padEnd(16)} ${row.held}/${row.limit} in use  (shared group)`);
           else console.log(`${row.scope.padEnd(16)} ${row.held}/${row.limit} in use`);
         }
-        if (![...Object.values(cfg.providers)].some((p) => (p.maxConcurrent ?? 0) > 0)) {
+        if (!providers.some(([, p]) => (p.maxConcurrent ?? 0) > 0)) {
           console.log('no concurrency limits set (all providers unbounded)');
         }
       }, opts.json);

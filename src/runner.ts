@@ -16,7 +16,7 @@ import type {
 } from './types.js';
 import { createHash } from 'node:crypto';
 import { pristineDir, tailOf } from './paths.js';
-import { resolveRunPlan, resolveCandidate } from './registry.js';
+import { assertWorkerEnabled, resolveRunPlan, resolveCandidate } from './registry.js';
 import { initProject } from './scaffold.js';
 import {
   applyPatch, applyWorkspacePatch, reverseApplyPatch, reverseApplyWorkspacePatch,
@@ -310,6 +310,7 @@ export async function executeRun(
       continue;
     }
 
+    assertWorkerEnabled(cand.workerId, cand.worker!, cand.providerId!, cand.provider!);
     const resolved = await resolveCandidate(cand, cfg);
     // Per-run reasoning-effort override (so one worker per model serves any effort,
     // instead of a separate `-high`/`-deep` worker per level).

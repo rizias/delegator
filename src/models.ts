@@ -4,8 +4,9 @@
 // puts it in the request header — the key value is never printed.
 import { spawnSync } from 'node:child_process';
 import { resolveBinary } from './proc.js';
-import { loadSecretPools } from './config.js';
+import { ConfigError, loadSecretPools } from './config.js';
 import { isLocalProvider } from './registry.js';
+import { globalConfigPath } from './paths.js';
 import type { DelegatorConfig, ProviderConfig } from './types.js';
 
 function resolveKey(providerId: string, provider: ProviderConfig): string | undefined {
@@ -25,6 +26,10 @@ export interface ModelsResult {
 
 export interface FetchProviderModelsOptions {
   preferRunning?: boolean;
+}
+
+function enabledModels(provider: ProviderConfig, models: string[]): string[] {
+  return models.filter((model) => provider.models?.[model]?.disabled !== true);
 }
 
 function runningModelsUrl(base: string): string {
@@ -58,6 +63,11 @@ export async function fetchProviderModels(
 ): Promise<ModelsResult> {
   const provider = cfg.providers[providerId];
   if (!provider) throw new Error(`unknown provider "${providerId}" (known: ${Object.keys(cfg.providers).join(', ')})`);
+  if (provider.disabled === true) {
+    throw new ConfigError(
+      `provider "${providerId}" is disabled in ${globalConfigPath()}; re-enable it with: dlg provider enable ${providerId}`,
+    );
+  }
   const kind = provider.kind;
 
   // opencode: DYNAMIC catalog — always fetch from the CLI, never hardcode (the list
@@ -66,7 +76,7 @@ export async function fetchProviderModels(
     const bin = resolveBinary('opencode') ?? 'opencode';
     const r = spawnSync(bin, ['models'], { encoding: 'utf8', timeout: 60_000, maxBuffer: 8 * 1024 * 1024 });
     const out = String(r.stdout ?? '') + String(r.stderr ?? '');
-    const models = out.split(/\r?\n/).map((l) => l.trim()).filter((l) => l.length > 0 && !l.includes(' '));
+    const models = enabledModels(provider, out.split(/\r?\n/).map((l) => l.trim()).filter((l) => l.length > 0 && !l.includes(' ')));
     if (!models.length) return { provider: providerId, kind, models: [], note: 'opencode returned no models — is it installed and authenticated? (run: opencode models)' };
     return { provider: providerId, kind, models };
   }
@@ -101,7 +111,7 @@ export async function fetchProviderModels(
   if (kind === 'openai-compatible' && options.preferRunning) {
     const running = await fetchRunningModels(base, headers);
     if (running !== undefined && running.length > 0) {
-      return { provider: providerId, kind, models: running, source: 'running' };
+      return { provider: providerId, kind, models: enabledModels(provider, running), source: 'running' };
     }
   }
 
@@ -116,6 +126,6 @@ export async function fetchProviderModels(
   }
   const json = (await resp.json()) as { data?: Array<{ id?: string }>; models?: Array<{ id?: string }> };
   const arr = json.data ?? json.models ?? [];
-  const models = arr.map((m) => m.id).filter((x): x is string => typeof x === 'string').sort();
+  const models = enabledModels(provider, arr.map((m) => m.id).filter((x): x is string => typeof x === 'string')).sort();
   return { provider: providerId, kind, models, source: 'models' };
 }

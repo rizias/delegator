@@ -1,5 +1,6 @@
 import fs from 'node:fs';
-import { parse as parseYaml } from 'yaml';
+import path from 'node:path';
+import { isAlias, isMap, isScalar, isSeq, parse as parseYaml, parseDocument } from 'yaml';
 import { z } from 'zod';
 import type {
   DelegatorConfig,
@@ -38,6 +39,95 @@ export class ConfigError extends Error {
     this.name = 'ConfigError';
     this.hint = hint;
   }
+}
+
+/** Park or revive one existing provider/model without rebuilding hand-maintained YAML. */
+export function updateProviderDisabled(providerId: string, modelId: string | undefined, disabled: boolean): string {
+  const file = globalConfigPath();
+  let source: string;
+  try {
+    source = fs.readFileSync(file, 'utf8');
+  } catch (e) {
+    throw new ConfigError(`Cannot read ${file}: ${(e as Error).message}`);
+  }
+
+  const doc = parseDocument(source, { uniqueKeys: true });
+  if (doc.errors.length > 0) {
+    throw new ConfigError(`${file} is not valid unambiguous YAML; refusing to write: ${doc.errors.map((e) => e.message).join('; ')}`);
+  }
+
+  const providers = doc.get('providers', true);
+  if (isAlias(providers)) throw new ConfigError('providers mapping is an alias; refusing an ambiguous target');
+  if (!isMap(providers)) throw new ConfigError(`${file} has no providers mapping`);
+
+  const providerPath = ['providers', providerId];
+  const provider = doc.getIn(providerPath, true);
+  if (provider === undefined) throw new ConfigError(`provider "${providerId}" does not exist in ${file}`);
+  if (isAlias(provider)) throw new ConfigError(`provider "${providerId}" is an alias; refusing an ambiguous target`);
+  if (!isMap(provider)) throw new ConfigError(`provider "${providerId}" is not a mapping; refusing to write`);
+
+  const targetPath = modelId === undefined ? providerPath : [...providerPath, 'models', modelId];
+  if (modelId !== undefined) {
+    const modelsPath = [...providerPath, 'models'];
+    let models = doc.getIn(modelsPath, true);
+    if (isAlias(models)) throw new ConfigError(`models for provider "${providerId}" is an alias; refusing an ambiguous target`);
+
+    // The accepted `[model-a, model-b]` shorthand cannot carry per-model fields. Convert it to
+    // the equivalent mapping once, carrying its comments onto the replacement nodes.
+    if (isSeq(models)) {
+      const sequence = models;
+      if (sequence.items.some(isAlias)) throw new ConfigError(`models for provider "${providerId}" contains an alias; refusing an ambiguous target`);
+      if (!sequence.items.every((item) => isScalar(item) && typeof item.value === 'string')) {
+        throw new ConfigError(`models for provider "${providerId}" is not an unambiguous list of model ids`);
+      }
+      const ids = sequence.items.map((item) => (item as { value: string }).value);
+      if (ids.filter((id) => id === modelId).length !== 1) {
+        throw new ConfigError(`model "${modelId}" does not exist uniquely under provider "${providerId}"`);
+      }
+      const replacement = doc.createNode(Object.fromEntries(ids.map((id) => [id, {}])));
+      if (!isMap(replacement)) throw new ConfigError('internal error converting models list');
+      replacement.commentBefore = sequence.commentBefore;
+      replacement.comment = sequence.comment;
+      replacement.spaceBefore = sequence.spaceBefore;
+      replacement.items.forEach((pair, index) => {
+        const old = sequence.items[index];
+        if (isScalar(pair.key) && isScalar(old)) {
+          pair.key.commentBefore = old.commentBefore;
+          pair.key.comment = old.comment;
+          pair.key.spaceBefore = old.spaceBefore;
+        }
+      });
+      doc.setIn(modelsPath, replacement);
+      models = replacement;
+    }
+
+    if (!isMap(models)) throw new ConfigError(`provider "${providerId}" has no model mapping`);
+    const model = doc.getIn(targetPath, true);
+    if (model === undefined) throw new ConfigError(`model "${modelId}" does not exist under provider "${providerId}"`);
+    if (isAlias(model)) throw new ConfigError(`model "${providerId}/${modelId}" is an alias; refusing an ambiguous target`);
+    if (!isMap(model)) {
+      if (!isScalar(model) || model.value !== null) {
+        throw new ConfigError(`model "${providerId}/${modelId}" is not a mapping; refusing to write`);
+      }
+      const replacement = doc.createNode({});
+      replacement.commentBefore = model.commentBefore;
+      replacement.comment = model.comment;
+      replacement.spaceBefore = model.spaceBefore;
+      doc.setIn(targetPath, replacement);
+    }
+  }
+
+  if (disabled) doc.setIn([...targetPath, 'disabled'], true);
+  else doc.deleteIn([...targetPath, 'disabled']);
+
+  const tmp = path.join(path.dirname(file), `.${path.basename(file)}.${process.pid}.${Date.now()}.tmp`);
+  try {
+    fs.writeFileSync(tmp, doc.toString(), { encoding: 'utf8', flag: 'wx', mode: fs.statSync(file).mode });
+    fs.renameSync(tmp, file);
+  } finally {
+    if (fs.existsSync(tmp)) fs.unlinkSync(tmp);
+  }
+  return file;
 }
 
 // ---------- parseDuration ----------
@@ -231,6 +321,7 @@ const ReasoningEffortSpecSchema = z
 
 const ModelConfigSchema = z
   .object({
+    disabled: z.literal(true).optional(),
     card: WorkerCardSchema.optional(),
     budget: partialBudgetInputSchema.optional(),
     fallback: z.union([z.string(), z.array(z.string()).min(1)]).optional(),
@@ -250,6 +341,7 @@ const ModelsInputSchema = z.union([z.array(z.string()), z.record(ModelEntrySchem
 const ProviderConfigSchema = z
   .object({
     kind: z.enum(['anthropic', 'anthropic-compatible', 'openai-compatible', 'codex-cli', 'opencode']),
+    disabled: z.literal(true).optional(),
     protocol: ProviderProtocolSchema.optional(),
     auth: ProviderAuthSchema.optional(),
     baseUrl: z.string().optional(),
@@ -267,6 +359,7 @@ const ProviderConfigSchema = z
   .strict();
 
 const RawProviderCommonShape = {
+  disabled: z.literal(true).optional(),
   protocol: ProviderProtocolSchema.optional(),
   auth: ProviderAuthSchema.optional(),
   baseUrl: z.string().optional(),

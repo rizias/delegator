@@ -95,6 +95,7 @@ Current provider fields:
 |---|---|---|
 | `protocol` | `anthropic`, `openai`, `opencode`, `none` | Wire/API compatibility. It is not a CLI brand. |
 | `auth` | `subscription`, `api-key`, `none` | How this provider authenticates. |
+| `disabled` | `true` only | Park this provider so it remains configured but receives no work. |
 | `baseUrl` | URL string | API endpoint for HTTP-compatible providers. |
 | `keyEnv` | env var name | Optional environment-variable fallback. This is the name, not the key value. |
 | `defaultRuntime` | runtime id | Pin the harness when `protocol` + `auth` matches more than one runtime. |
@@ -163,6 +164,7 @@ Current model fields:
 | `tools` | string list | Optional model-level tool allowlist. |
 | `reasoningEffort` | string or `{ levels, default }` | Supported reasoning levels for this model. Use the model's own level names. |
 | `fallback` | handle or handle list | Candidate(s) to try when this model cannot run. |
+| `disabled` | `true` only | Park only this model while leaving sibling models enabled. |
 
 Accepted compatibility/metadata fields in the zod schema:
 
@@ -170,6 +172,20 @@ Accepted compatibility/metadata fields in the zod schema:
 |---|---|
 | `card.goodFor`, `card.avoidFor`, `card.notes` | Advisory metadata accepted by the schema; not part of the current routing surface. |
 | `price.inPerMtok`, `price.outPerMtok` | Cost metadata accepted by the schema. |
+
+`disabled: true` may be set on a provider or one model. An absent `disabled` field means enabled;
+`disabled: false` is not accepted. Parked entries remain visible in `dlg providers` with status
+`disabled`, but are excluded from runs, routes, fallbacks, councils, and model discovery. Disabled
+providers are also excluded from queue capacity. Use the dedicated commands so comments in the
+hand-maintained YAML are kept:
+
+```text
+dlg provider disable <provider> [model]
+dlg provider enable <provider> [model]
+```
+
+For example, `dlg provider enable zai glm-5.2` removes the model's `disabled` field. Re-enabling does
+not reset circuit-breaker or key-cooldown state.
 
 `fallback` is transitive and cycle-safe. It is used when the selected model cannot run because a
 provider, key, runtime, concurrency slot, breaker, or binary is unavailable. A model with no
@@ -489,4 +505,3 @@ builtin:openai-chat        # response parser for the direct-api (openai-compatib
 `parser: none` is not a preset; it marks an in-process direct-api descriptor in the shipped runtime
 loader. A descriptor that names `builtin:generic-lines` needs no parser code. Adding an agent is a
 `runtimes.yaml` block plus a new parser preset only when the output format is novel.
-

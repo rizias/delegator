@@ -8,6 +8,7 @@ import {
   withModelDefaults,
 } from './config.js';
 import { fetchProviderModels } from './models.js';
+import { globalConfigPath } from './paths.js';
 import type {
   DelegatorConfig,
   ProviderConfig,
@@ -109,6 +110,26 @@ export function resolveWorkerHandle(id: string, cfg: DelegatorConfig): WorkerCon
   return withModelDefaults({ provider: parsed.provider, model: parsed.model, runtime }, provider);
 }
 
+export function isWorkerDisabled(worker: Pick<WorkerConfig, 'model'> | undefined, provider: ProviderConfig): boolean {
+  return provider.disabled === true || (worker?.model !== undefined && provider.models?.[worker.model]?.disabled === true);
+}
+
+function disabledReason(id: string, worker: Pick<WorkerConfig, 'model'>, providerId: string, provider: ProviderConfig): string {
+  if (provider.disabled === true) {
+    return `provider "${providerId}" is disabled in ${globalConfigPath()}; re-enable it with: dlg provider enable ${providerId}`;
+  }
+  return `worker "${id}" is disabled in ${globalConfigPath()}; re-enable it with: dlg provider enable ${providerId} ${worker.model!}`;
+}
+
+export function assertWorkerEnabled(
+  id: string,
+  worker: Pick<WorkerConfig, 'model'>,
+  providerId: string,
+  provider: ProviderConfig,
+): void {
+  if (isWorkerDisabled(worker, provider)) throw new ConfigError(disabledReason(id, worker, providerId, provider));
+}
+
 export function workerInfo(id: string, cfg: DelegatorConfig, snapshot?: DelegatorState): WorkerInfo {
   const worker = resolveWorkerHandle(id, cfg);
   if (!worker) {
@@ -154,6 +175,10 @@ export function workerInfo(id: string, cfg: DelegatorConfig, snapshot?: Delegato
     price: worker.price,
   };
   const as = (status: WorkerInfo['status'], reason?: string): WorkerInfo => ({ ...base, status, reason });
+
+  // A parked worker is intentionally disabled, regardless of keys, runtime health, project
+  // restrictions, or breaker state. Nothing below this point may probe it.
+  if (provider && isWorkerDisabled(worker, provider)) return as('disabled', disabledReason(id, worker, providerId, provider));
 
   // 1. Project allow-list (restrict): a worker outside the list is off-limits here.
   const allow = cfg.restrict?.workers;
@@ -269,6 +294,8 @@ export async function resolveForRun(
           '(edit restrict.workers in .delegator.yaml)',
       );
     }
+
+    if (info.status === 'disabled') throw new ConfigError(info.reason ?? `Worker "${wid}" is disabled`);
 
     if (info.status === 'unconfigured') {
       throw new ConfigError(info.reason ?? `Worker "${wid}" is unconfigured`);
@@ -390,6 +417,9 @@ function buildFallbackChain(
     if (seen.has(key)) continue;
     seen.add(key);
 
+    const provider = cfg.providers[worker.provider];
+    if (provider && isWorkerDisabled(worker, provider)) continue;
+
     const candidate = candidateForWorker(handle, cfg, snapshot);
     if (candidate !== undefined) candidates.push(candidate);
 
@@ -444,6 +474,7 @@ export async function resolveCandidate(cand: RunCandidate, cfg: DelegatorConfig)
   const worker0 = cand.worker!;
   const provider = cand.provider!;
   const providerId = cand.providerId!;
+  assertWorkerEnabled(cand.workerId, worker0, providerId, provider);
   const model = await resolveWorkerModel(cfg, cand.workerId, worker0, provider, providerId);
   const worker = model === worker0.model ? worker0 : { ...worker0, model };
   return {
@@ -481,6 +512,8 @@ export function resolveRunPlan(
     const wid = defaultWorkerId!;
     const info = workerInfo(wid, cfg, snapshot);
 
+    if (info.status === 'disabled') throw new ConfigError(info.reason ?? `Worker "${wid}" is disabled`);
+
     if (!opts.tolerant && info.status === 'restricted') {
       const allow = cfg.restrict?.workers ?? [];
       throw new ConfigError(
@@ -514,6 +547,7 @@ export function resolveRunPlan(
   const candidates: RunCandidate[] = [];
   for (const wid of tierCfg.chain) {
     const info = workerInfo(wid, cfg, snapshot);
+    if (info.status === 'disabled') continue;
     if (info.status === 'available' || info.status === 'degraded') {
       const worker = resolveWorkerHandle(wid, cfg)!;
       const prov = cfg.providers[worker.provider]!;
