@@ -13,6 +13,9 @@ All notable changes to Delegator are documented here. This project adheres to
 - A local "synthetic" notice from the Claude CLI (e.g. an interrupted turn) is no longer misread as an
   authentication failure, so it can't wrongly bench a subscription worker on the circuit breaker.
 
+- `dlg council` now runs each model at the strongest reasoning level it supports, instead of forcing
+  one level that some models reject (which could leave a run stuck without a result).
+
 ### Documentation
 - Host skills now advise running self-review fan-outs through separate-pool workers when practical.
 

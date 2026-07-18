@@ -85,27 +85,22 @@ async function runOneCouncilWorker(
 
   for (; attempts < maxAttempts; attempts++) {
     const model = req.options.models.find((m) => m.handle === handle)!;
-    const explicitEffort = model.reasoningEffort !== undefined;
-    const effort = model.reasoningEffort ?? 'xhigh';
     try {
-      const run = (effortOverride?: string) => executeRun({
+      // Council default: think as hard as EACH worker can, in that worker's OWN level vocabulary.
+      // An explicit per-model effort is passed verbatim; otherwise the runner resolves the "highest"
+      // intent against the worker's declared levels — never a fixed cross-model literal (a hardcoded
+      // "xhigh" once errored on every worker whose vocabulary lacked it).
+      const env = await executeRun({
         workerId: handle,
         brief: req.task,
         cwd: req.cwd,
         policy: 'review',
         skipPrune: true,
         ...(budgetOverride ? { budgetOverride } : {}),
-        ...(effortOverride ? { effortOverride } : {}),
+        ...(model.reasoningEffort !== undefined
+          ? { effortOverride: model.reasoningEffort }
+          : { effortIntent: 'highest' }),
       }, cfg);
-      let env: Envelope;
-      try {
-        env = await run(effort);
-      } catch (e) {
-        // The default council effort is xhigh, but older/simple workers may not declare it.
-        // In that case keep the worker usable by falling back to its configured default.
-        if (explicitEffort || !(e instanceof ConfigError) || !e.message.includes('--effort "xhigh"')) throw e;
-        env = await run();
-      }
       if ((env.status === 'failed' || env.status === 'rejected') && attempts + 1 < maxAttempts) {
         lastError = new Error(env.stopReason);
         continue;

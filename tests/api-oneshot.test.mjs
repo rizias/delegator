@@ -17,6 +17,8 @@ process.env.DELEGATOR_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'dlg-oneshot-
 const { buildDirectApiRequest, directApiRuntimeFromDescriptor } = await import('../dist/runtimes/direct_api.js');
 const { openaiChatParser } = await import('../dist/parsers/openai-chat.js');
 const { executeRun } = await import('../dist/runner.js');
+const { readMeta, listRuns } = await import('../dist/runstore.js');
+const { ConfigError } = await import('../dist/config.js');
 
 const apiDescriptor = {
   mode: 'direct-api',
@@ -375,6 +377,103 @@ test('executeRun: api-oneshot worker without model auto-resolves the only loaded
   } finally {
     globalThis.fetch = orig;
   }
+});
+
+test('executeRun: effortIntent "highest" resolves to the strongest level the worker declares', async () => {
+  const repo = makeRepo();
+  const cfg = baseConfig();
+  cfg.workers['lmstudio-oneshot'] = { provider: 'lmstudio', model: 'local-model', runtime: 'api', reasoningEffortLevels: ['minimal', 'low', 'medium', 'high'] };
+  let seenEffort = 'UNSET';
+  const fakeRuntime = {
+    id: 'api',
+    execute: async (c) => {
+      seenEffort = c.resolved.worker.reasoningEffort;
+      return { status: 'completed', summary: 'ok', stopReason: 'ok', errType: 'server', failure: null };
+    },
+  };
+  const env = await executeRun(
+    { workerId: 'lmstudio-oneshot', brief: 'hi', cwd: repo, policy: 'review', effortIntent: 'highest' },
+    cfg,
+    { api: fakeRuntime },
+  );
+  assert.equal(env.status, 'completed');
+  assert.equal(seenEffort, 'high', 'highest = last declared level, in the worker\'s own vocabulary');
+});
+
+test('executeRun: effortIntent "highest" on a worker with NO declared levels runs with no effort (never throws)', async () => {
+  const repo = makeRepo();
+  const cfg = baseConfig();
+  cfg.workers['lmstudio-oneshot'] = { provider: 'lmstudio', model: 'local-model', runtime: 'api' }; // no reasoningEffortLevels
+  let seenEffort = 'UNSET';
+  const fakeRuntime = {
+    id: 'api',
+    execute: async (c) => {
+      seenEffort = c.resolved.worker.reasoningEffort;
+      return { status: 'completed', summary: 'ok', stopReason: 'ok', errType: 'server', failure: null };
+    },
+  };
+  const env = await executeRun(
+    { workerId: 'lmstudio-oneshot', brief: 'hi', cwd: repo, policy: 'review', effortIntent: 'highest' },
+    cfg,
+    { api: fakeRuntime },
+  );
+  assert.equal(env.status, 'completed');
+  assert.equal(seenEffort, undefined, 'no levels declared -> no effort forced, worker still runs');
+});
+
+test('executeRun: an explicit --effort the worker does not declare ends REJECTED, never a stuck preparing run', async () => {
+  const repo = makeRepo();
+  const cfg = baseConfig();
+  cfg.workers['lmstudio-oneshot'] = { provider: 'lmstudio', model: 'local-model', runtime: 'api', reasoningEffortLevels: ['low', 'high'] };
+  let ran = false;
+  const fakeRuntime = {
+    id: 'api',
+    execute: async () => { ran = true; return { status: 'completed', summary: 'ok', stopReason: 'ok', errType: 'server', failure: null }; },
+  };
+  const env = await executeRun(
+    { workerId: 'lmstudio-oneshot', brief: 'hi', cwd: repo, policy: 'review', effortOverride: 'turbo' },
+    cfg,
+    { api: fakeRuntime },
+  );
+  assert.equal(env.status, 'rejected', 'a bad explicit effort is a clean rejection, not a throw');
+  assert.equal(ran, false, 'the worker never ran');
+  assert.match(env.stopReason, /not a level/);
+  assert.equal(readMeta(env.runId).state, 'done', 'the persisted run is finalized, not left in preparing');
+});
+
+test('executeRun: a runtime that throws yields a terminal, finalized run — never stranded in preparing', async () => {
+  const repo = makeRepo();
+  const fakeRuntime = { id: 'api', execute: async () => { throw new Error('boom in runtime'); } };
+  let threw = false;
+  let env;
+  try {
+    env = await executeRun(
+      { workerId: 'lmstudio-oneshot', brief: 'hi', cwd: repo, policy: 'review' },
+      baseConfig(),
+      { api: fakeRuntime },
+    );
+  } catch { threw = true; }
+  assert.equal(threw, false, 'executeRun must not propagate an unexpected runtime throw');
+  assert.equal(env.status, 'rejected', 'an unexpected throw becomes a terminal rejection');
+  assert.equal(readMeta(env.runId).state, 'done', 'the PERSISTED run reached a terminal state, not preparing');
+});
+
+test('executeRun: a ConfigError mid-run still propagates (exit 2) but the run is finalized first — no preparing zombie', async () => {
+  // The catch re-throws ConfigError so config problems still exit 2, but ONLY after finalizing the
+  // run — otherwise a ConfigError thrown after createRun (e.g. a disabled worker) would strand the
+  // run in `preparing`, the exact bug the wrap fixes. (Found by the separate-pool council review.)
+  const repo = makeRepo();
+  const fakeRuntime = { id: 'api', execute: async () => { throw new ConfigError('simulated config problem'); } };
+  await assert.rejects(
+    () => executeRun({ workerId: 'lmstudio-oneshot', brief: 'hi', cwd: repo, policy: 'review' }, baseConfig(), { api: fakeRuntime }),
+    (e) => e instanceof ConfigError,
+    'a ConfigError must keep propagating for exit 2',
+  );
+  assert.deepEqual(
+    listRuns().filter((m) => m.state === 'preparing'),
+    [],
+    'the run was finalized before the re-throw — no preparing zombie left behind',
+  );
 });
 
 test('executeRun: an api-oneshot worker that cannot be reached returns a clear FAILED envelope', async () => {

@@ -46,7 +46,8 @@ export interface ExecuteRequest {
   cwd: string;
   policy: Policy;
   budgetOverride?: Partial<BudgetSpec>;
-  effortOverride?: ReasoningEffort;  // per-run reasoning effort, overrides the worker's default
+  effortOverride?: ReasoningEffort;  // per-run reasoning effort (an explicit level), overrides the worker's default
+  effortIntent?: 'highest';          // resolve to the strongest level THIS worker declares (council's default)
   toolsOverride?: string[];
   skipPrune?: boolean;
 }
@@ -303,103 +304,131 @@ export async function executeRun(
 
   const attempts: AttemptRecord[] = [];
 
-  for (let i = 0; i < plan.candidates.length; i++) {
-    const cand = plan.candidates[i]!;
-    if (!cand.available) {
-      attempts.push({ workerId: cand.workerId, outcome: 'skipped', ...(cand.skipReason ? { reason: cand.skipReason } : {}) });
-      continue;
-    }
-
-    assertWorkerEnabled(cand.workerId, cand.worker!, cand.providerId!, cand.provider!);
-    const resolved = await resolveCandidate(cand, cfg);
-    // Per-run reasoning-effort override (so one worker per model serves any effort,
-    // instead of a separate `-high`/`-deep` worker per level).
-    if (req.effortOverride) {
-      const levels = resolved.worker.reasoningEffortLevels ?? [];
-      if (levels.length > 0 && !levels.includes(req.effortOverride)) {
-        throw new ConfigError(
-          `--effort "${req.effortOverride}" is not a level of ${cand.workerId}; choose one of: ${levels.join(', ')}`,
-        );
+  // The run record now exists. Any throw from here on must become a terminal `rejected` envelope
+  // rather than leave the run stranded in `preparing` — except ConfigError (a config problem the
+  // user must fix, e.g. a disabled worker), which keeps propagating to exit 2 as before.
+  try {
+    for (let i = 0; i < plan.candidates.length; i++) {
+      const cand = plan.candidates[i]!;
+      if (!cand.available) {
+        attempts.push({ workerId: cand.workerId, outcome: 'skipped', ...(cand.skipReason ? { reason: cand.skipReason } : {}) });
+        continue;
       }
-      resolved.worker = { ...resolved.worker, reasoningEffort: req.effortOverride };
-    }
-    const runtimeId = normalizeRuntimeId(resolved.worker.runtime);
-    const runtime = runtimeRegistry[runtimeId];
-    if (!runtime) {
-      attempts.push({ workerId: cand.workerId, outcome: 'skipped', reason: `unknown runtime: ${resolved.worker.runtime}` });
-      continue;
-    }
 
-    // preflight is a spawn-runtime concept (e.g. codex's version gate). In-process
-    // runtimes have nothing to check before the call.
-    const pre = isInProcess(runtime) ? null : (runtime.preflight?.() ?? null);
-    if (pre) {
-      attempts.push({ workerId: cand.workerId, outcome: 'skipped', reason: pre.reason });
-      store.appendEvent(id, {
-        ts: Date.now(), stream: 'system', kind: 'output',
-        raw: `skipped ${resolved.workerId}: ${pre.reason}`,
+      assertWorkerEnabled(cand.workerId, cand.worker!, cand.providerId!, cand.provider!);
+      const resolved = await resolveCandidate(cand, cfg);
+      // Per-run reasoning effort. Levels are per-worker (each runtime/model owns its own vocabulary),
+      // so there is no cross-model scale: an explicit level this worker does not declare is recorded
+      // as a clean skip — NOT thrown (throwing here once stranded the run in `preparing`). The
+      // `highest` intent (council's default) maps to the strongest level THIS worker declares; a
+      // worker that declares no levels simply runs with no effort set.
+      const declaredLevels = resolved.worker.reasoningEffortLevels ?? [];
+      if (req.effortOverride !== undefined) {
+        if (declaredLevels.length > 0 && !declaredLevels.includes(req.effortOverride)) {
+          attempts.push({
+            workerId: cand.workerId, outcome: 'skipped',
+            reason: `--effort "${req.effortOverride}" is not a level of ${cand.workerId}; choose one of: ${declaredLevels.join(', ')}`,
+          });
+          continue;
+        }
+        resolved.worker = { ...resolved.worker, reasoningEffort: req.effortOverride };
+      } else if (req.effortIntent === 'highest' && declaredLevels.length > 0) {
+        resolved.worker = { ...resolved.worker, reasoningEffort: declaredLevels[declaredLevels.length - 1] };
+      }
+      const runtimeId = normalizeRuntimeId(resolved.worker.runtime);
+      const runtime = runtimeRegistry[runtimeId];
+      if (!runtime) {
+        attempts.push({ workerId: cand.workerId, outcome: 'skipped', reason: `unknown runtime: ${resolved.worker.runtime}` });
+        continue;
+      }
+
+      // preflight is a spawn-runtime concept (e.g. codex's version gate). In-process
+      // runtimes have nothing to check before the call.
+      const pre = isInProcess(runtime) ? null : (runtime.preflight?.() ?? null);
+      if (pre) {
+        attempts.push({ workerId: cand.workerId, outcome: 'skipped', reason: pre.reason });
+        store.appendEvent(id, {
+          ts: Date.now(), stream: 'system', kind: 'output',
+          raw: `skipped ${resolved.workerId}: ${pre.reason}`,
+        });
+        continue;
+      }
+
+      const budget = mergeBudget(cfg, plan.tierCfg, resolved.worker, req.budgetOverride);
+
+      store.updateMeta(id, {
+        workerId: resolved.workerId,
+        providerId: resolved.providerId,
+        model: resolved.worker.model,
+        runtime: runtimeId,
       });
-      continue;
-    }
+      if (attempts.length > 0) {
+        const routeLabel = plan.tierName !== undefined ? `tier "${plan.tierName}"` : 'model fallback';
+        store.appendEvent(id, {
+          ts: Date.now(), stream: 'system', kind: 'output',
+          raw: `fallback: ${routeLabel} advancing to ${resolved.workerId} (${attempts.length} prior attempt(s))`,
+        });
+      }
 
-    const budget = mergeBudget(cfg, plan.tierCfg, resolved.worker, req.budgetOverride);
+      const outcome = await runWorkerAttempt(id, resolved, runtime, budget, plan.tierCfg, req, cfg);
 
-    store.updateMeta(id, {
-      workerId: resolved.workerId,
-      providerId: resolved.providerId,
-      model: resolved.worker.model,
-      runtime: runtimeId,
-    });
-    if (attempts.length > 0) {
-      const routeLabel = plan.tierName !== undefined ? `tier "${plan.tierName}"` : 'model fallback';
-      store.appendEvent(id, {
-        ts: Date.now(), stream: 'system', kind: 'output',
-        raw: `fallback: ${routeLabel} advancing to ${resolved.workerId} (${attempts.length} prior attempt(s))`,
-      });
-    }
+      const moreAvailableAhead = plan.candidates.slice(i + 1).some((c) => c.available);
+      if (outcome.ran && outcome.shouldFallback && plan.fallback === 'auto' && moreAvailableAhead) {
+        attempts.push({
+          workerId: resolved.workerId, model: resolved.worker.model, outcome: 'failed-over',
+          status: outcome.status, ...(firstErrType(outcome.errors) ? { errType: firstErrType(outcome.errors) } : {}),
+          reason: outcome.stopReason,
+        });
+        store.appendEvent(id, {
+          ts: Date.now(), stream: 'system', kind: 'output',
+          raw: `worker ${resolved.workerId} failed (${outcome.stopReason}); falling over (${plan.tierName !== undefined ? 'tier.fallback' : 'model fallback'}: auto)`,
+        });
+        cleanupAttempt(req.cwd, outcome); // discard the failed attempt's worktree/workspace
+        continue;
+      }
 
-    const outcome = await runWorkerAttempt(id, resolved, runtime, budget, plan.tierCfg, req, cfg);
-
-    const moreAvailableAhead = plan.candidates.slice(i + 1).some((c) => c.available);
-    if (outcome.ran && outcome.shouldFallback && plan.fallback === 'auto' && moreAvailableAhead) {
+      // Terminal: this attempt is the run's result.
       attempts.push({
-        workerId: resolved.workerId, model: resolved.worker.model, outcome: 'failed-over',
+        workerId: resolved.workerId, model: resolved.worker.model, outcome: 'ran',
         status: outcome.status, ...(firstErrType(outcome.errors) ? { errType: firstErrType(outcome.errors) } : {}),
-        reason: outcome.stopReason,
       });
-      store.appendEvent(id, {
-        ts: Date.now(), stream: 'system', kind: 'output',
-        raw: `worker ${resolved.workerId} failed (${outcome.stopReason}); falling over (${plan.tierName !== undefined ? 'tier.fallback' : 'model fallback'}: auto)`,
-      });
-      cleanupAttempt(req.cwd, outcome); // discard the failed attempt's worktree/workspace
-      continue;
+      const env = finalizeAttempt(id, resolved, outcome, budget, req, cfg, startedAt, attempts);
+      store.updateMeta(id, { state: 'done', endedAt: new Date().toISOString() });
+      // Council fan-out defers pruning until after gathering every sibling result.
+      if (!req.skipPrune) store.pruneRuns(cfg.defaults.keepRuns); // retention: oldest finished runs beyond the cap
+      return env;
     }
 
-    // Terminal: this attempt is the run's result.
-    attempts.push({
-      workerId: resolved.workerId, model: resolved.worker.model, outcome: 'ran',
-      status: outcome.status, ...(firstErrType(outcome.errors) ? { errType: firstErrType(outcome.errors) } : {}),
+    // No candidate ever ran — every worker was skipped or unavailable (breaker open,
+    // unconfigured in a tier, privacy-denied). Honest `rejected` with the reasons.
+    const detail = attempts.map((a) => `${a.workerId}: ${a.reason ?? a.outcome}`).join('; ');
+    const env = finalize(id, 'rejected', baseMeta.workerId, baseMeta.model, baseMeta.runtime, {
+      summary: req.tier ? `no available worker in tier "${req.tier}"` : `worker "${baseMeta.workerId}" is not available`,
+      stopReason: `all candidates were skipped or unavailable (${detail || 'none'})`,
+      errors: [{ type: 'internal', message: 'no available worker', ...(detail ? { detail } : {}) }],
+      verification: SKIPPED,
+      wallClockMs: Date.now() - startedAt,
+      attempts: attemptsForEnvelope(attempts),
     });
-    const env = finalizeAttempt(id, resolved, outcome, budget, req, cfg, startedAt, attempts);
     store.updateMeta(id, { state: 'done', endedAt: new Date().toISOString() });
-    // Council fan-out defers pruning until after gathering every sibling result.
-    if (!req.skipPrune) store.pruneRuns(cfg.defaults.keepRuns); // retention: oldest finished runs beyond the cap
+    return env;
+  } catch (err) {
+    // Never leave the created run stranded in `preparing`. Record a terminal rejection FIRST — even
+    // for a ConfigError — then let a ConfigError keep propagating to exit 2 (its message tells the
+    // user what to fix, e.g. a disabled worker). Any other throw returns the rejected envelope.
+    const detail = err instanceof Error ? (err.stack ?? err.message) : String(err);
+    const env = finalize(id, 'rejected', baseMeta.workerId, baseMeta.model, baseMeta.runtime, {
+      summary: `worker "${baseMeta.workerId}" run failed before completion`,
+      stopReason: `run failed before producing an envelope: ${err instanceof Error ? err.message : String(err)}`,
+      errors: [{ type: 'internal', message: 'run failed before producing an envelope', detail }],
+      verification: SKIPPED,
+      wallClockMs: Date.now() - startedAt,
+      attempts: attemptsForEnvelope(attempts),
+    });
+    store.updateMeta(id, { state: 'done', endedAt: new Date().toISOString() });
+    if (err instanceof ConfigError) throw err; // config problem: exit 2 — but the run is now terminal, not a zombie
     return env;
   }
-
-  // No candidate ever ran — every worker was skipped or unavailable (breaker open,
-  // unconfigured in a tier, privacy-denied). Honest `rejected` with the reasons.
-  const detail = attempts.map((a) => `${a.workerId}: ${a.reason ?? a.outcome}`).join('; ');
-  const env = finalize(id, 'rejected', baseMeta.workerId, baseMeta.model, baseMeta.runtime, {
-    summary: req.tier ? `no available worker in tier "${req.tier}"` : `worker "${baseMeta.workerId}" is not available`,
-    stopReason: `all candidates were skipped or unavailable (${detail || 'none'})`,
-    errors: [{ type: 'internal', message: 'no available worker', ...(detail ? { detail } : {}) }],
-    verification: SKIPPED,
-    wallClockMs: Date.now() - startedAt,
-    attempts: attemptsForEnvelope(attempts),
-  });
-  store.updateMeta(id, { state: 'done', endedAt: new Date().toISOString() });
-  return env;
 }
 
 /**
