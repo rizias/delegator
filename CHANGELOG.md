@@ -10,6 +10,8 @@ All notable changes to Delegator are documented here. This project adheres to
 - Providers and individual models can now be parked and later revived without deleting their configuration or comments.
 
 ### Fixed
+- `dlg apply` no longer deletes files in your real repository during worktree cleanup on Windows: teardown
+  never follows a linked or pnpm-materialized `node_modules` junction out of the worktree.
 - A local "synthetic" notice from the Claude CLI (e.g. an interrupted turn) is no longer misread as an
   authentication failure, so it can't wrongly bench a subscription worker on the circuit breaker.
 

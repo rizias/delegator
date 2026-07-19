@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { ensureDir, pristineDir, tailOf, workspaceDir, worktreeDir } from './paths.js';
+import { configHome, ensureDir, pristineDir, tailOf, workspaceDir, worktreeDir } from './paths.js';
 
 function runGit(args: string[], cwd: string): string {
   const result = spawnSync('git', args, {
@@ -69,9 +69,9 @@ export function createWorktree(
 
 /** Make the repo's installed deps available in a fresh worktree so verify commands (`npm test`,
  *  etc.) can actually run there. `node_modules` is gitignored → absent from a `git worktree`; we
- *  LINK (junction on Windows, symlink on POSIX) the main repo's copy. The link is removed before
- *  the worktree is deleted (unlinkNodeModules) so cleanup can never touch the real node_modules.
- *  Best-effort: if linking fails, verify may skip/fail — it must never crash run setup. */
+ *  LINK (junction on Windows, symlink on POSIX) the main repo's copy. Teardown (removeWorktree)
+ *  scrubs every junction/symlink first and never follows one, so removing a worktree can never touch
+ *  the real node_modules. Best-effort: if linking fails, verify may skip/fail — never crash setup. */
 function linkNodeModules(repo: string, worktree: string): void {
   try {
     // MUST be absolute: a junction with a relative target is resolved relative to the LINK's own
@@ -86,22 +86,41 @@ function linkNodeModules(repo: string, worktree: string): void {
   }
 }
 
-/** Remove ONLY the node_modules link we created (never its target). A Windows junction is a
- *  directory reparse point removed via rmdir; a POSIX symlink via unlink — neither deletes the
- *  real node_modules. A real directory (a worker that installed its own deps) is left for the
- *  normal worktree removal. */
-function unlinkNodeModules(worktree: string): void {
-  const dest = path.join(worktree, 'node_modules');
+/** Remove a single reparse point (Windows junction / dir-symlink / POSIX symlink) AS a link, never
+ *  following it to its target. A junction / dir-symlink is removed with rmdir; a file symlink with
+ *  unlink — we try both. Best-effort: a stray link left behind is harmless; following one is not. */
+function removeLink(p: string): void {
+  if (process.platform === 'win32') {
+    try { fs.rmdirSync(p); return; } catch { /* not a junction/dir-symlink — try unlink */ }
+    try { fs.unlinkSync(p); } catch { /* locked or already gone — leave it */ }
+  } else {
+    try { fs.unlinkSync(p); return; } catch { /* dir-symlink on some filesystems — try rmdir */ }
+    try { fs.rmdirSync(p); } catch { /* locked or already gone — leave it */ }
+  }
+}
+
+/** Detach EVERY reparse point inside a worktree before the tree is deleted. Walks depth-first with
+ *  lstat and, for any symlink/junction — a linked node_modules, or a pnpm workspace link inside a
+ *  node_modules the worker materialized — removes it AS a link WITHOUT recursing into it. This is the
+ *  guard that stops teardown from following a link OUT of the worktree and deleting real repo source
+ *  (the DLG-APPLY data-loss on Windows/pnpm). Only REAL directories are descended into. */
+function scrubReparsePoints(dir: string): void {
+  let entries: fs.Dirent[];
   try {
-    const st = fs.lstatSync(dest); // lstat — never follow the link
-    if (!st.isSymbolicLink()) return; // a real dir (or absent) — not our link
-    if (process.platform === 'win32') {
-      try { fs.rmdirSync(dest); } catch { fs.unlinkSync(dest); }
-    } else {
-      fs.unlinkSync(dest);
-    }
+    entries = fs.readdirSync(dir, { withFileTypes: true });
   } catch {
-    // absent, or removal failed — better to leave a stray link than risk the real node_modules
+    return; // absent or unreadable — nothing to scrub
+  }
+  for (const ent of entries) {
+    const full = path.join(dir, ent.name);
+    let st: fs.Stats;
+    try {
+      st = fs.lstatSync(full); // lstat — classify the link itself, never its target
+    } catch {
+      continue; // vanished mid-walk
+    }
+    if (st.isSymbolicLink()) removeLink(full); // reparse point — detach, never enter
+    else if (st.isDirectory()) scrubReparsePoints(full); // real dir — safe to descend
   }
 }
 
@@ -155,16 +174,37 @@ export function extractPatch(wt: string): {
 }
 
 export function removeWorktree(repo: string, dir: string): void {
-  unlinkNodeModules(dir); // remove our deps link FIRST so neither git nor rmSync can follow it
+  // Fail-closed containment: a recursive delete must only ever run on a real delegator worktree
+  // (…/projects/<project>/<runId>/worktree). If a caller ever passes something else, refuse loudly
+  // rather than let teardown loose on an unexpected tree. This is a should-never-happen invariant,
+  // separate from the best-effort delete below.
+  const resolved = path.resolve(dir);
+  const runtimeRoot = path.resolve(configHome(), 'projects');
+  const rel = path.relative(runtimeRoot, resolved);
+  const insideRuntime = rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
+  if (!insideRuntime || path.basename(resolved) !== 'worktree') {
+    throw new Error(
+      `removeWorktree refused: '${dir}' is not a delegator worktree under '${runtimeRoot}'`,
+    );
+  }
+  // Teardown must NEVER follow a reparse point out of the worktree. git-for-Windows
+  // `git worktree remove --force` walks junctions/symlinks — a linked node_modules, or a pnpm
+  // workspace link inside a node_modules the worker materialized — INTO the real repo and deletes
+  // their targets: hundreds of real source files, working-tree only (the DLG-APPLY data-loss,
+  // reproduced on Windows/pnpm). So detach every reparse point first, then delete the tree ourselves
+  // with fs.rm (which does not follow junctions) and prune ONLY git's admin metadata. We never call
+  // `git worktree remove` — its recursive delete is the unsafe step.
+  scrubReparsePoints(dir);
   try {
-    runGit(['worktree', 'remove', '--force', dir], repo);
-  } catch {
     fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
-    try {
-      runGit(['worktree', 'prune'], repo);
-    } catch {
-      // ignore prune failures
-    }
+  } catch {
+    // a persistent lock (AV / indexer / a just-killed worker's handle) — leave the heavy dir for the
+    // reaper rather than fail teardown; the apply itself has already succeeded.
+  }
+  try {
+    runGit(['worktree', 'prune'], repo); // drop the now-dangling admin entry in .git/worktrees
+  } catch {
+    // best-effort — never fail cleanup over a prune
   }
 }
 
