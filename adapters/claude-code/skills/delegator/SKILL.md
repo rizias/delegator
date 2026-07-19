@@ -2,7 +2,7 @@
 name: delegator
 description: Dispatch well-specified coding tasks to a separate-pool worker via the delegator CLI (dlg) instead of burning your own tokens. Use when the user says "delegator", "delegate this", "hand it to a worker", asks to save tokens on a mechanical or standard coding task, or a well-specified task needs no conversation context. Do not use for trivial one-off edits, tasks needing conversation context, or security-sensitive code.
 metadata:
-  delegator-skill-version: "2026-07-17T00:00:00Z"
+  delegator-skill-version: "2026-07-18T00:00:00Z"
 ---
 
 # Delegator — dispatch work to a separate-pool worker
@@ -125,6 +125,12 @@ dlg doctor · dlg gain --history        # diagnose env · per-run savings report
 ```
 
 Run long tasks in the background; poll `dlg status <id>` or read the final envelope when done.
+
+**Parking a dead-key provider.** `dlg provider disable <provider> [model]` sets `disabled: true` in
+`providers.yaml` so that provider (or one model) stays configured but is excluded from selection,
+fallback, discovery and council; `dlg provider enable <provider> [model]` revives it. It writes only
+that one line — comments and formatting stay intact — so never hand-edit the config for this. When a
+worker repeatedly fails auth (HTTP 401 / expired key), ask the user first, then run it on a "yes".
 
 ## Council — one task across several models
 
