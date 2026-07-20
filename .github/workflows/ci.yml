@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:  # allow manual "Run workflow" from the Actions tab (no push/PR needed)
 
 jobs:
   test:
