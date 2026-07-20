@@ -334,6 +334,45 @@ test('provider disable and enable preserve comments and only mutate existing tar
   assert.match(fs.readFileSync(path.join(shorthandHome, 'providers.yaml'), 'utf8'), /# keep shorthand comment/);
 });
 
+test('provider enable of an unknown model in a shorthand list fails loudly, not a false success', () => {
+  const home = writeConfig([
+    'version: 1',
+    'providers:',
+    '  p: { kind: openai-compatible, auth: none, models: [a, b] }',
+    'workers: {}',
+    'tiers: {}',
+    '',
+  ]);
+  // Regression: the `!disabled` early-return once skipped existence validation for a shorthand list,
+  // so `enable p typo` reported success for a model that does not exist. It must now error.
+  let r = runCli(home, ['provider', 'enable', 'p', 'typo']);
+  assert.notEqual(r.status, 0, 'enabling an unknown shorthand model must fail');
+  assert.match(r.stderr, /model "typo" does not exist uniquely/);
+  // Enabling an EXISTING shorthand model is a clean no-op (shorthand entries are never disabled),
+  // and it leaves the shorthand list byte-identical.
+  r = runCli(home, ['provider', 'enable', 'p', 'b']);
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(fs.readFileSync(path.join(home, 'providers.yaml'), 'utf8'), /models: \[a, b\]/);
+});
+
+test('provider enable of an existing shorthand model is not blocked by an unrelated alias in the list', () => {
+  // Regression (round 2): scoping enable to target existence must not reject the whole list just
+  // because a DIFFERENT element is an alias — enabling rewrites nothing, so unrelated aliases are
+  // irrelevant. (Disabling, which converts the list, still refuses aliases.)
+  const home = writeConfig([
+    'version: 1',
+    'providers:',
+    '  p: { kind: &m openai-compatible, auth: none, models: [*m, b] }',
+    'workers: {}',
+    'tiers: {}',
+    '',
+  ]);
+  const r = runCli(home, ['provider', 'enable', 'p', 'b']);
+  assert.equal(r.status, 0, r.stderr);
+  // No-op enable leaves the file (and its alias) untouched.
+  assert.match(fs.readFileSync(path.join(home, 'providers.yaml'), 'utf8'), /models: \[\*m, b\]/);
+});
+
 test('provider toggles refuse duplicate and aliased target mappings without writing', () => {
   for (const lines of [
     ['version: 1', 'providers:', '  p: { kind: openai-compatible }', '  p: { kind: opencode }'],

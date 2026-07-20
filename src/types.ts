@@ -132,6 +132,8 @@ export interface WorkerConfig {
    *  it to the tool's own flag (codex: `-c model_reasoning_effort`); runtimes without a
    *  reasoning knob ignore it. */
   reasoningEffort?: string;
+  /** The reasoning levels this worker accepts, ordered WEAKEST → STRONGEST (contract). The council's
+   *  `highest` effort intent resolves to the last entry, so keep custom lists in ascending strength. */
   reasoningEffortLevels?: string[];
   runtime: RuntimeId;  // filled in by loadConfig from the provider's kind when omitted in YAML
   budget?: Partial<BudgetSpec>;

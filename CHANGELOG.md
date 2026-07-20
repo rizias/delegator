@@ -14,11 +14,14 @@ All notable changes to Delegator are documented here. This project adheres to
   never follows a linked or pnpm-materialized `node_modules` junction out of the worktree.
 - A local "synthetic" notice from the Claude CLI (e.g. an interrupted turn) is no longer misread as an
   authentication failure, so it can't wrongly bench a subscription worker on the circuit breaker.
-
 - `dlg council` now runs each model at the strongest reasoning level it supports, instead of forcing
   one level that some models reject (which could leave a run stuck without a result).
 - A run whose delegator process exits before it finishes is now closed as failed on the next
   `dlg status`, instead of lingering forever as a live/preparing run.
+- `dlg clean --worktrees` now reclaims workspace-policy run copies through the lock-tolerant path and
+  no longer aborts the whole sweep when a single directory is locked.
+- `dlg provider enable <provider> <model>` now fails with a clear error when the model is not in a
+  shorthand `models: [ ... ]` list, instead of reporting a false success.
 
 ### Documentation
 - Host skills now advise running self-review fan-outs through separate-pool workers when practical.

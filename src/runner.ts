@@ -333,6 +333,10 @@ export async function executeRun(
         }
         resolved.worker = { ...resolved.worker, reasoningEffort: req.effortOverride };
       } else if (req.effortIntent === 'highest' && declaredLevels.length > 0) {
+        // `reasoningEffortLevels` is ordered weakest→strongest by contract (see types.ts and every
+        // shipped runtime in runtimes.default.yaml), so the strongest level THIS worker declares is
+        // the last entry. A hand-written config that lists levels out of order would mis-resolve
+        // "highest" — the ordering is the documented contract, not enforced in code.
         resolved.worker = { ...resolved.worker, reasoningEffort: declaredLevels[declaredLevels.length - 1] };
       }
       const runtimeId = normalizeRuntimeId(resolved.worker.runtime);

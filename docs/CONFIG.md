@@ -305,6 +305,10 @@ outside it is rejected at run time:
 CLI --effort <level>  >  model reasoningEffort.default  >  runtime effortLevels.default
 ```
 
+Level lists (`effortLevels.levels`, and any model `reasoningEffort.levels` that narrows the catalog)
+are ordered **weakest → strongest** by contract. `dlg council`'s default `highest` effort intent
+resolves to the LAST entry, so keep hand-written lists in ascending strength.
+
 > **Caution — delegator validates a level against the catalog, but does NOT verify the provider honors
 > it distinctly.** A valid level is passed verbatim to the worker. Most providers (OpenAI, native
 > Anthropic) *reject* an unsupported level with an HTTP error, so a wrong level fails loudly. But some

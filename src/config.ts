@@ -145,11 +145,20 @@ export function updateProviderDisabled(providerId: string, modelId: string | und
     if (isAlias(models)) throw new ConfigError(`models for provider "${providerId}" is an alias; refusing an ambiguous target`);
 
     if (isSeq(models)) {
-      // `[model-a, model-b]` shorthand cannot carry per-model fields — a structural change that
-      // cannot be a byte-faithful line edit. Convert via the AST (carrying comments) and re-serialize;
-      // this is the one path that may reflow, and it only triggers for shorthand model lists.
-      if (!disabled) return file; // nothing is disabled inside a shorthand list
       const sequence = models;
+      // Enable only needs the TARGET to exist as a plain scalar id — it rewrites nothing, so an
+      // unrelated alias or non-scalar entry elsewhere in the list is irrelevant and must not make it
+      // fail. This still rejects `enable p <typo>` (a false success before), without over-rejecting.
+      if (!disabled) {
+        const targetHits = sequence.items.filter((item) => isScalar(item) && (item as { value: unknown }).value === modelId).length;
+        if (targetHits !== 1) {
+          throw new ConfigError(`model "${modelId}" does not exist uniquely under provider "${providerId}"`);
+        }
+        return file; // a shorthand list carries no per-model fields → nothing is disabled → validated no-op
+      }
+      // Disable converts the whole `[a, b]` list into a mapping — the one reflow path — so the ENTIRE
+      // list must be unambiguous (plain scalar ids, no aliases) before we rewrite it. Convert via the
+      // AST (carrying comments) and re-serialize.
       if (sequence.items.some(isAlias)) throw new ConfigError(`models for provider "${providerId}" contains an alias; refusing an ambiguous target`);
       if (!sequence.items.every((item) => isScalar(item) && typeof item.value === 'string')) {
         throw new ConfigError(`models for provider "${providerId}" is not an unambiguous list of model ids`);

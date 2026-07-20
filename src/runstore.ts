@@ -13,7 +13,7 @@ import {
   pristineDir,
   dirSizeBytes,
 } from './paths.js';
-import { removeWorktree, pruneWorktreeAdmin } from './worktree.js';
+import { removeWorktree, removeWorkspace, pruneWorktreeAdmin } from './worktree.js';
 import { pidAlive } from './semaphore.js';
 import type { RunMeta, WorkerEvent, Envelope } from './types.js';
 
@@ -163,11 +163,23 @@ export function writePatch(id: string, patch: string): string {
 /**
  * A run whose owning delegator process is gone but that never reached a terminal state is an
  * orphan (the process crashed / was Ctrl-C'd / a council parent was killed between `createRun`
- * and finalize — an in-process `api` run has no worker pid to kill-detect, so this is the only
- * signal). Close it as a terminal `failed` so it stops showing as a live/preparing zombie.
+ * and finalize — an in-process `api` run has no worker pid to kill-detect, so owner liveness is
+ * the only signal). Close it as a terminal `failed` so it stops showing as a live/preparing zombie.
  * Best-effort and idempotent: only fires once (state flips to `done`), never touches a run whose
  * owner is still alive, and swallows write races with a concurrent finalize. Mutates `m` in place
  * so a freshly-listed metas array reflects the reap without a re-read.
+ *
+ * Liveness is judged by owner PID (`process.kill(pid, 0)`), the same reclaim oracle used across
+ * delegator (semaphore). A recycled owner PID is the known, accepted limit of that model: it can keep
+ * one orphan visible an extra window; it is never a false close of a live run.
+ *
+ * KNOWN LIMITATION (spawn-runtime worker leak): this closes the run RECORD but does NOT terminate a
+ * worker CHILD that outlived its owner (a spawn runtime is detached on POSIX, so it survives an owner
+ * crash and keeps burning compute / holding the worktree). We deliberately do NOT kill by `m.pid`
+ * here: unlike the explicit `dlg kill`, the reaper runs automatically on every listing, so a recycled
+ * PID would make it signal an unrelated process — and `m.pid` can be 0 (spawn-with-no-pid), where
+ * `killTree(0)` would signal the reaper's OWN process group. Safely reclaiming the child needs
+ * process-birth identity (creation time / token), not just a PID — tracked as future work.
  */
 function reapIfOrphaned(m: RunMeta): void {
   if (m.state === 'done') return;
@@ -283,23 +295,44 @@ export function reapWorktrees(): { dropped: number; freedBytes: number } {
   let dropped = 0;
   let freedBytes = 0;
   const repos = new Set<string>();
+  // Lock-tolerant fallback delete for a single heavy dir. Never follows a reparse point out of the
+  // tree (fs.rm removes junctions/symlinks AS links) and never throws — a persistent lock leaves the
+  // dir for a later pass rather than aborting the whole reap.
+  const rmHeavy = (p: string): void => {
+    try { fs.rmSync(p, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); } catch { /* locked — leave it */ }
+  };
   for (const m of listRuns()) {
     const cwd = m.request?.cwd;
-    const heavy = cwd
-      ? [worktreeDir(cwd, m.id), workspaceDir(cwd, m.id), pristineDir(cwd, m.id)]
-      : (m.worktree ? [m.worktree] : []);
-    for (const h of heavy) {
-      if (!fs.existsSync(h)) continue;
-      freedBytes += dirSizeBytes(h);
-      try {
-        if (cwd) removeWorktree(cwd, h);
-        else fs.rmSync(h, { recursive: true, force: true });
-      } catch {
-        fs.rmSync(h, { recursive: true, force: true });
+    if (!cwd) {
+      // Legacy/no-cwd run: only the recorded worktree path is known.
+      if (m.worktree && fs.existsSync(m.worktree)) {
+        const sz = dirSizeBytes(m.worktree);
+        rmHeavy(m.worktree);
+        if (!fs.existsSync(m.worktree)) { freedBytes += sz; dropped += 1; } // count only an actual removal
       }
-      dropped++;
+      continue;
     }
-    if (cwd) repos.add(cwd);
+    // A git-worktree run: the containment-guarded remover scrubs reparse points and prunes admin.
+    const wt = worktreeDir(cwd, m.id);
+    if (fs.existsSync(wt)) {
+      const sz = dirSizeBytes(wt);
+      try { removeWorktree(cwd, wt); } catch { rmHeavy(wt); }
+      if (!fs.existsSync(wt)) { freedBytes += sz; dropped += 1; } // count only if the dir is actually gone
+    }
+    // A no-git workspace-policy run: workspace + pristine are a PAIR. removeWorkspace is lock-tolerant
+    // and, unlike removeWorktree, does not reject their non-`worktree` basenames on the containment
+    // guard (which previously forced an unguarded fs.rmSync that a lock could throw straight out of).
+    const ws = workspaceDir(cwd, m.id);
+    const pr = pristineDir(cwd, m.id);
+    const wsSz = fs.existsSync(ws) ? dirSizeBytes(ws) : -1;
+    const prSz = fs.existsSync(pr) ? dirSizeBytes(pr) : -1;
+    if (wsSz >= 0 || prSz >= 0) {
+      try { removeWorkspace(pr, ws); } catch { rmHeavy(ws); rmHeavy(pr); }
+      // Count each path only if it is actually gone — a persistent lock leaves it for a later pass.
+      if (wsSz >= 0 && !fs.existsSync(ws)) { freedBytes += wsSz; dropped += 1; }
+      if (prSz >= 0 && !fs.existsSync(pr)) { freedBytes += prSz; dropped += 1; }
+    }
+    repos.add(cwd);
   }
   for (const repo of repos) pruneWorktreeAdmin(repo);
   return { dropped, freedBytes };

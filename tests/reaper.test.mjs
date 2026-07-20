@@ -6,8 +6,13 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { spawn } from 'node:child_process';
 
 process.env.DELEGATOR_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'dlg-reaper-home-'));
+
+function alive(pid) {
+  try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; }
+}
 
 const { createRun, listRuns, readMeta, readEnvelope, writeEnvelope, updateMeta } = await import('../dist/runstore.js');
 
@@ -94,4 +99,24 @@ test('reaping is idempotent — a second listing does not rewrite the reaped run
   listRuns(); // second pass must be a no-op for this already-done run
   assert.equal(JSON.stringify(readEnvelope(m.id)), envAfterFirst, 'the terminal envelope is stable across listings');
   assert.equal(readMeta(m.id).state, 'done');
+});
+
+test('reaping an orphan finalizes the run but never signals m.pid (safety: no auto-kill of a reused/0 pid)', async () => {
+  // A stand-in for a spawn-runtime worker child that outlived its (now-dead) owner. The reaper closes
+  // the run RECORD, but must NOT kill by m.pid: automatic PID-based termination is unsafe (a recycled
+  // PID would hit an unrelated process; m.pid can be 0, whose kill signals the reaper's own group).
+  // This leaves a known worker leak — the safe trade-off until process-birth identity exists.
+  const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1 << 30)'], { stdio: 'ignore' });
+  await new Promise((r) => child.once('spawn', r));
+  const childPid = child.pid;
+  assert.ok(alive(childPid), 'precondition: the stand-in worker child is running');
+
+  const m = createRun(mkMeta({ ownerPid: DEAD_PID, pid: childPid }), 'brief');
+  listRuns(); // reaps the orphan
+  await new Promise((r) => setTimeout(r, 300)); // give any (unwanted) async kill a chance to land
+
+  assert.equal(readMeta(m.id).state, 'done', 'the orphan run record is finalized');
+  assert.equal(readEnvelope(m.id).status, 'failed');
+  assert.ok(alive(childPid), 'the reaper must NOT terminate by pid — never risk killing a wrong/own process');
+  try { child.kill('SIGKILL'); } catch { /* test cleanup */ }
 });
