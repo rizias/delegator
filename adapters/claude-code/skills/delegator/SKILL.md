@@ -2,15 +2,14 @@
 name: delegator
 description: Dispatch well-specified coding tasks to a separate-pool worker via the delegator CLI (dlg) instead of burning your own tokens. Use when the user says "delegator", "delegate this", "hand it to a worker", asks to save tokens on a mechanical or standard coding task, or a well-specified task needs no conversation context. Do not use for trivial one-off edits, tasks needing conversation context, or security-sensitive code.
 metadata:
-  delegator-skill-version: "2026-07-18T00:00:00Z"
+  delegator-skill-version: "2026-07-20T00:00:00Z"
 ---
 
 # Delegator — dispatch work to a separate-pool worker
 
 `dlg` (alias `delegator`) is a brainless dispatcher: **you** decide and judge; it spawns a bounded
-worker in an isolated git worktree and returns a result envelope. Invoke this skill with
-`/delegator`, or call `dlg` directly. Requires: the target project is a git repo with at least one
-commit.
+worker in an isolated worktree for git projects or workspace copy for plain directories and returns a
+result envelope. Invoke this skill with `/delegator`, or call `dlg` directly.
 
 > This **host** skill teaches *you, the orchestrator*, when and how to delegate. It is a different
 > concern from **worker equipment** (`equip.skills` in config / a worker's `--skill` toggle), which
@@ -22,7 +21,7 @@ commit.
 2. Trivial one-off (one read, one-line edit) → yourself; delegation overhead exceeds the task.
 3. Needs this conversation's context → yourself; workers start cold (repo + brief only).
 4. Mechanical or standard implementation, fully specifiable → delegate to a cheap worker.
-5. **Commit before delegating** — workers see HEAD, not your dirty tree.
+5. For git projects, **commit before delegating** — workers see HEAD, not your dirty tree.
 
 Fan-out discipline: ≤2–3 parallel runs, sequential work = **one** worker, state the batch cost
 before launching, workers never spawn workers.
@@ -74,11 +73,11 @@ breaker open, rate-limited, missing key, or binary absent. It is transitive (eac
 its own) and cycle-safe. A model with no `fallback` runs or fails; then you re-dispatch. Inspect any
 chain with `dlg route -w <handle>`.
 
-**Reasoning effort** is per-task: `dlg run -w <handle> --effort <level>`, validated against the
-model's declared `reasoningEffort.levels`. Precedence: CLI `--effort` > model default > runtime
-default.
+**Reasoning effort** is per-task: `dlg run -w <handle> --effort <level>`, validated only when the
+resolved worker declares `reasoningEffort.levels`; otherwise it is passed through. Precedence: CLI
+`--effort` > model default > runtime default.
 
-**Provider shape:** `protocol` (`anthropic` | `openai` | `opencode`) + `auth`
+**Provider shape:** `protocol` (`anthropic` | `openai` | `opencode` | `none`) + `auth`
 (`subscription` | `api-key` | `none`); the runtime is inferred from those, or pinned with
 `defaultRuntime`. `keyEnv` is an env-var **name** only — never a key value.
 
@@ -112,35 +111,36 @@ and architecture with yourself. Iterate with a second run rather than asking for
 
 ```bash
 dlg providers [--json]                 # what's available / unconfigured right now
-dlg models <provider>                  # live model list a provider offers (fetched, never hardcoded)
+dlg models <provider>                  # fetches a live model list where supported; otherwise reports why not
 dlg route -w <handle>                  # resolved fallback chain + each candidate's availability
 dlg plan -w <handle> [-f brief.md]     # dry run: chain, context-fit — NO tokens spent
 dlg run -w <handle> [-f brief.md | --task "..."] [--effort ..] [--budget 10m] [--policy review] [--json]
-dlg council -w <h1>,<h2>,<h3> [-f brief.md | -m "task"] [--budget 10m] [--min-proposers 2] [--aggregate <model>]
+dlg council -w <h1>,<h2>,<h3> [-f brief.md | -m "task"] [--budget 10m] [--min-proposers 2] [--aggregate <handle>]
 dlg status [id]                        # runs / live state with last-activity age
 dlg logs <id> --tail 20                # worker event stream (works mid-run)
 dlg result <id> --json                 # the result envelope
-dlg apply <id> · dlg undo <id>         # apply a reviewed patch / roll it back (the only write paths)
+dlg apply <id> · dlg undo <id>         # patch-application write paths
 dlg doctor · dlg gain --history        # diagnose env · per-run savings report
 ```
 
 Run long tasks in the background; poll `dlg status <id>` or read the final envelope when done.
 
 **Parking a dead-key provider.** `dlg provider disable <provider> [model]` sets `disabled: true` in
-`providers.yaml` so that provider (or one model) stays configured but is excluded from selection,
-fallback, discovery and council; `dlg provider enable <provider> [model]` revives it. It writes only
-that one line — comments and formatting stay intact — so never hand-edit the config for this. When a
-worker repeatedly fails auth (HTTP 401 / expired key), ask the user first, then run it on a "yes".
+`providers.yaml` so that provider (or one model) stays configured and visible as `disabled`, but is
+excluded from selection, fallback, council, and runs; `dlg provider enable <provider> [model]` revives
+it. Formatting stays intact except disabling a model in a shorthand `models: [a, b]` list converts it
+to a mapping. When a worker repeatedly fails auth (HTTP 401 / expired key), ask the user first, then
+run it on a "yes".
 
 ## Council — one task across several models
 
-`dlg council -w <h1,h2,h3> -m "<task>"` fans ONE task out to several workers **in parallel** (each is a
-plain `dlg run`: review policy forced, own sandbox, per-worker `--budget`) and returns every worker's FULL
-answer + diff + tokens, plus a ready aggregate-and-synthesize `bundle`. **The command produces NO final
-answer — YOU are the aggregator:** read `candidates` + `bundle` and synthesize the final yourself with
-conversation context (evaluate critically, discard weak or wrong parts, do not merge blindly, do not
-reward length). `--aggregate <model>` exists ONLY for headless runs with no live orchestrator; never use
-it interactively — a same-family aggregator is a redundant pass.
+`dlg council -w <h1,h2,h3> -m "<task>"` fans ONE task out to several workers **in parallel** (each
+spawned runtime is a plain `dlg run`: review policy forced, own sandbox, per-worker `--budget`; direct-API
+members run in-process without a sandbox or patch) and returns every worker's FULL answer + diff + tokens,
+plus a ready aggregate-and-synthesize `bundle`. `--aggregate <handle>` asks the CORE to aggregate and emit
+`final`; prefer synthesizing yourself when you hold
+conversation context — evaluate critically, discard weak or wrong parts, do not merge blindly, do not
+reward length.
 
 - **When:** open-ended tasks with no test/oracle (design decisions, reviews, analysis, research) where one
   model's blind spots matter. NOT for mechanical coding — delegate that to ONE worker. NOT for short-form
@@ -153,15 +153,17 @@ it interactively — a same-family aggregator is a redundant pass.
   aggregate DOWN (quality beats diversity).
 - **No council config exists.** Models are always passed per invocation; knobs are plain flags: `--budget`
   (per worker — size with headroom for hard tasks), `--min-proposers` (default 2) — an honesty quorum, not
-  control: with fewer usable answers the envelope says `quorumMet: false`, `stopReason: degraded` and the
-  result is a single model's opinion, not a council.
+  control. With no explicit per-model effort, each worker gets its declared strongest level (levels are
+  weakest→strongest), not a fixed cross-model literal. With fewer usable answers the envelope says
+  `quorumMet: false`, `stopReason: degraded`: a degraded, below-quorum result.
 - **On `quorumMet: false`:** report it honestly; you MAY offer to add your own independent take (solve the
   task cold yourself as one more voice) — only WITH the user's consent, never silently.
-- **Point `--cwd` at the CODE the council must SEE.** Each worker gets its OWN isolated worktree/copy of
-  `--cwd` — that is the only code they can read. To review or analyse a codebase, set `--cwd` to the
-  project root so they read the LIVE source; a scratch dir holding only a pasted brief makes them review
-  BLIND and guess. The brief (`-f <file>`) is read by the orchestrator and may live anywhere. A plain
-  `--cwd` is right only for a code-free question (pure design or research).
+- **Point `--cwd` at the CODE the council must SEE.** Each spawned runtime gets its OWN isolated
+  worktree/copy of `--cwd` — that is the only code it can read; direct-API members receive only the brief.
+  To review or analyse a codebase, set `--cwd` to the project root so spawned runtimes read the LIVE source;
+  a scratch dir holding only a pasted brief makes them review BLIND and guess. The brief (`-f <file>`) is
+  read by the orchestrator and may live anywhere. A plain `--cwd` is right only for a code-free question
+  (pure design or research).
 - **Read the envelope:** every candidate carries `runId` (`dlg logs/result <id>` for its trace), full
   `answer`, `tokens` incl. reasoning (report per-worker + totals to the user — always), and `warnings`
   (failed workers, same-family pairs). Works in a plain folder without git.
@@ -190,7 +192,7 @@ The only hard rule is the brief is non-empty. A clear brief still wins; this str
   before re-running.
 - `killed-*` → read `stopReason` + last worker output; apply useful partial work or re-dispatch with
   the previous run id and remaining work.
-- `rejected` (unconfigured) → check `dlg providers`; do not retry the same handle.
+- `rejected` → inspect `stopReason` and `errors`; do not assume unconfigured.
 - `failed` → stderr tail is in `errors[].detail`; one retry on a fallback is reasonable, then
   escalate to the user.
 - Never trust worker claims over the envelope's verification block.

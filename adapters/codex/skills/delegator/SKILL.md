@@ -2,7 +2,7 @@
 name: delegator
 description: Dispatch well-specified coding tasks to a separate-pool worker via the delegator CLI (dlg) instead of burning your own tokens. Use when the user says "delegator", "delegate this", "hand it to a worker", asks to save tokens on a mechanical or standard coding task, or a well-specified task needs no conversation context. Do not use for trivial one-off edits, tasks needing conversation context, or security-sensitive code.
 metadata:
-  delegator-skill-version: "2026-07-18T00:00:00Z"
+  delegator-skill-version: "2026-07-20T00:00:00Z"
 ---
 
 # delegator — for a Codex orchestrator
@@ -12,8 +12,8 @@ metadata:
 > toggle), which loads a skill *into a spawned worker*.
 
 `dlg` (alias `delegator`) is a brainless dispatcher: **you** decide and judge; it spawns a bounded
-worker in an isolated git worktree and returns a result envelope. The target project must be a git
-repo with at least one commit. **Commit before delegating** — workers see HEAD, not your dirty tree.
+worker in an isolated worktree for git projects or workspace copy for plain directories and returns a
+result envelope. For git projects, **commit before delegating** — workers see HEAD, not your dirty tree.
 
 ## When to delegate
 
@@ -63,17 +63,18 @@ removes `secrets.yaml`, so the user re-adds keys).
 breaker open, rate-limited, missing key, or binary absent. Transitive and cycle-safe. No `fallback` →
 runs or fails; then you re-dispatch. Inspect any chain with `dlg route -w <handle>`.
 
-**Reasoning effort** is per-task: `dlg run -w <handle> --effort <level>`, validated against the
-model's `reasoningEffort.levels`. Precedence: CLI `--effort` > model default > runtime default.
+**Reasoning effort** is per-task: `dlg run -w <handle> --effort <level>`, validated only when the
+resolved worker declares `reasoningEffort.levels`; otherwise it is passed through. Precedence: CLI
+`--effort` > model default > runtime default.
 For a codex-routed model, delegator turns `--effort` into codex's own flag
 (`-c model_reasoning_effort="<level>"`) — you still pass `--effort`, never the `-c` flag yourself.
 
-**Provider shape:** `protocol` (`anthropic` | `openai` | `opencode`) + `auth`
+**Provider shape:** `protocol` (`anthropic` | `openai` | `opencode` | `none`) + `auth`
 (`subscription` | `api-key` | `none`); runtime inferred from those, or pinned with `defaultRuntime`.
 `keyEnv` is an env-var **name** only — never a key value.
 
 Runtime inference is unambiguous **except** `openai` + `subscription`, which matches both `codex` and
-`pi` → set `defaultRuntime: codex`. **Codex speaks only the OpenAI Responses API: a
+`pi` → set `defaultRuntime: codex` (or `pi`). **Codex speaks only the OpenAI Responses API: a
 Chat-Completions-only provider (z.ai / GLM, etc.) cannot run through the `codex` runtime** — reach it
 via `claude` (its anthropic endpoint) or `api` (chat/completions) instead.
 
@@ -98,39 +99,45 @@ first; name exact files in Scope; keep wiring, tricky logic, and architecture fo
 
 ```bash
 dlg providers [--json]                 # what's available / unconfigured
-dlg models <provider>                  # live model list (fetched, never hardcoded)
+dlg models <provider>                  # fetches a live model list where supported; otherwise reports why not
 dlg route -w <handle>                  # resolved fallback chain + availability
 dlg plan -w <handle> [-f brief.md]     # dry run: chain, context-fit — NO tokens spent
 dlg run -w <handle> [-f brief.md | --task "..."] [--effort ..] [--budget 10m] [--policy review] [--json]
-dlg council -w <h1>,<h2>,<h3> [-f brief.md | -m "task"] [--budget 10m] [--min-proposers 2] [--aggregate <model>]
+dlg council -w <h1>,<h2>,<h3> [-f brief.md | -m "task"] [--budget 10m] [--min-proposers 2] [--aggregate <handle>]
 dlg status [id] · dlg logs <id> --tail 20 · dlg result <id> --json
-dlg apply <id> · dlg undo <id>         # apply a reviewed patch / roll it back (the only write paths)
+dlg apply <id> · dlg undo <id>         # patch-application write paths
 dlg doctor · dlg gain --history        # diagnose env · per-run savings report
 ```
 
 **Parking a dead-key provider.** `dlg provider disable <provider> [model]` sets `disabled: true` in
-`providers.yaml` so that provider (or one model) stays configured but is excluded from selection,
-fallback, discovery and council; `dlg provider enable <provider> [model]` revives it. It writes only
-that one line — comments intact — so never hand-edit the config for this. On a worker's repeated auth
-failure (401 / expired key), ask the user first, then run it on a "yes".
+`providers.yaml` so that provider (or one model) stays configured and visible as `disabled`, but is
+excluded from selection, fallback, council, and runs; `dlg provider enable <provider> [model]` revives
+it. Formatting stays intact except disabling a model in a shorthand `models: [a, b]` list converts it
+to a mapping. On a worker's repeated auth failure (401 / expired key), ask the user first, then run it
+on a "yes".
 
 ## Council — one task across several models
 
-`dlg council -w <h1,h2,h3> -m "<task>"` fans ONE task to several workers **in parallel** (each a plain
-`dlg run`: review policy, own sandbox, per-worker `--budget`) and returns every worker's full answer +
-diff + tokens plus an aggregate-and-synthesize `bundle`. **No final answer is produced — YOU aggregate:**
-read `candidates` + `bundle` and synthesize yourself (evaluate critically, drop weak parts, don't reward
-length). `--aggregate <model>` is for headless runs only; never interactively.
+`dlg council -w <h1,h2,h3> -m "<task>"` fans ONE task to several workers **in parallel** (each spawned
+runtime is a plain `dlg run`: review policy forced, own sandbox, per-worker `--budget`; direct-API members
+run in-process without a sandbox or patch) and returns every worker's full answer + diff + tokens plus an
+aggregate-and-synthesize `bundle`. `--aggregate <handle>` asks the CORE to aggregate and emit `final`;
+prefer synthesizing yourself when you hold
+conversation context — evaluate critically, drop weak or wrong parts, don't merge blindly, don't
+reward length.
 
 - **When:** open-ended tasks with no oracle (design, review, analysis, research). NOT mechanical coding
   (one worker), NOT short-form writing (synthesis bloats tight prose). ~4x pool tokens vs one model.
 - **Models:** 2–4 DIFFERENT strong families, per task (diversity = different families; self-ensembling
   one model adds nothing measurable — 2026-07-03 evals). `card.goodFor` is an optional hint; avoid weak members (they drag the aggregate down).
-- **No config.** Flags: `--budget` (per worker), `--min-proposers` (default 2). Fewer usable answers →
-  `quorumMet: false`, `stopReason: degraded` (a single opinion, not a council) — report it honestly.
-- **`--cwd` = the code the council sees.** For a code review point it at the project root so each worker
-  reads the LIVE source (own worktree); a scratch dir with only a pasted brief = blind review. The brief
-  (`-f <file>`) is read by the orchestrator and can live anywhere. Plain `--cwd` only for code-free questions.
+- **No config.** Flags: `--budget` (per worker), `--min-proposers` (default 2). With no explicit
+  per-model effort, each worker gets its declared strongest level (levels are weakest→strongest), not a
+  fixed cross-model literal. Fewer usable answers → `quorumMet: false`, `stopReason: degraded`: a
+  degraded, below-quorum result — report it honestly.
+- **`--cwd` = the code the council sees.** For a code review point it at the project root so each spawned
+  runtime reads the LIVE source in its own worktree/copy; direct-API members receive only the brief. A
+  scratch dir with only a pasted brief = blind review. The brief (`-f <file>`) is read by the orchestrator
+  and can live anywhere. Plain `--cwd` only for code-free questions.
 - **Envelope:** each candidate has `runId`, full `answer`, `tokens` incl. reasoning (report per-worker +
   totals — always), `warnings`. Works without git.
 
@@ -145,7 +152,7 @@ Definition of done / Output / Forbidden) still wins. On the envelope: `completed
 `patch.diff` then `dlg apply`; `partial`/`requires-review` → work may be finished,
 review before re-running; `killed-*` → read `stopReason`, inspect logs/result, then apply partial
 work or re-dispatch;
-`rejected` (unconfigured) → check `dlg providers`; `failed` → one retry on a fallback, then
+`rejected` → inspect `stopReason` and `errors`; do not assume unconfigured. `failed` → one retry on a fallback, then
 escalate. Trust the envelope's verification block, not the worker's claims.
 
 **Filing a bug (optional):** if the user wants to report a failure, collect facts only — **don't

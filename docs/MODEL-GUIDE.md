@@ -74,8 +74,9 @@ a 5-hour usage window. One standard worker with a good brief would have done it.
   Sequential work — read, then synthesize, then write — is ONE worker, not a pipeline of swarms.
 - Bound the batch before launching: N runs × budget each, stated out loud. A batch is an orchestration
   decision, not a default.
-- Orchestration depth is one: workers never spawn workers (enforced — worker toolsets exclude
-  agent-spawning tools). Anything deeper reinvents the runaway loop with extra steps.
+- Orchestration depth is one by default: workers should not spawn workers. The Claude runtime descriptor
+  excludes its `Task` tool; other runtimes have no equivalent core-wide restriction. Anything deeper
+  reinvents the runaway loop with extra steps.
 - "50 agents built a startup overnight" is marketing until proven on your own `runs.jsonl`. Default to
   skepticism; let telemetry promote parallelism.
 
@@ -88,7 +89,7 @@ A user who ran mechanical workers on a real Java repo distilled rules we adopt v
 - **Smallest compilable patch first**; grow by follow-up runs, not by bigger briefs.
 - **Fewer files, less freedom**: exact file list in Scope, everything else in Forbidden.
 - **Wiring and hard parts** go to a strong worker or stay with the orchestrator.
-- **No exploration budgets**: give paths in the brief; worker sub-agents are disabled by the core.
+- **No exploration budgets**: give paths in the brief; Claude runtime workers have the `Task` tool disabled.
 
 **Native subagents vs delegator** — the practical split when the orchestrator is Claude Code:
 
@@ -101,7 +102,8 @@ A user who ran mechanical workers on a real Java repo distilled rules we adopt v
 ### 2.3 Council — fan one task across several models
 
 When a task is open-ended with no test/oracle (design decisions, reviews, analysis, research),
-`dlg council -w m1,m2,m3 -m "<task>"` runs it across 2–4 DIFFERENT strong families in parallel and
+`dlg council -w m1,m2,m3 -m "<task>"` is best used with 2–4 strong, different-family models in parallel;
+the code requires at least two distinct handles, warns on same-family choices, and has no upper limit. It
 returns every answer plus a synthesis `bundle`; the orchestrator writes the final (or a headless caller
 passes `--aggregate <model>`). In practice it beats the strongest single model on judgment tasks but
 LOSES on short-form writing (synthesis bloats tight prose), at ~4x the worker-pool tokens. Diversity

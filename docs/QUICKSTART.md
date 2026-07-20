@@ -82,9 +82,11 @@ A fuller, annotated recipe lives in [examples/providers.example.yaml](../example
 ## 4. Check it works
 
 ```bash
-dlg doctor          # binaries found? CLIs logged in? keys present? workers available?
+dlg doctor          # binaries, keys, config, workers, and login reminders
 dlg providers       # every worker and whether it can run right now
 ```
+
+A CLI login is confirmed only by an actual worker run.
 
 ## 5. Your first run
 
@@ -110,7 +112,7 @@ providers:
 ```
 
 Give a task, a time budget (`--budget`, the only limit you set), and a reasoning effort
-(`--effort`, model-specific — `low | medium | high | …`; run `dlg providers` to see a model's levels):
+(`--effort`, model-specific — `low | medium | high | …`; see the model/runtime config for supported levels):
 
 ```bash
 dlg run -w zai/glm-5 --task "Add a --version flag to src/cli.ts" --budget 10m --effort medium

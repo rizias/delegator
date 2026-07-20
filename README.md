@@ -54,9 +54,10 @@ at anything — a local model, a second account, a spare API key, an agent CLI. 
   <img src="docs/architecture.svg" alt="Architecture: your coding agent dispatches verified tasks to many workers" width="100%">
 </p>
 
-Your agent picks the worker; Delegator spawns it as a separate process in its own git worktree,
-enforces the budget, runs your verification, and returns a patch — with logs and usage — to apply,
-compare, or undo.
+Your agent picks the worker. In a git project, Delegator spawns a CLI worker as a separate process in
+its own worktree, enforces the budget, runs your verification, and returns a patch — with logs and
+usage — to apply, compare, or undo. A direct-API worker runs in-process and returns text, with no
+worktree or patch.
 
 ## Configure a worker
 
@@ -122,7 +123,7 @@ Preview, run, inspect, then apply or undo:
 dlg plan   -f brief.md                  # preview the route, no run
 dlg run    -f brief.md --budget 10m     # default policy: review
 dlg result <runId>                      # status, diff, usage
-dlg logs   <runId>                      # full worker exchange
+dlg logs   <runId>                      # worker-event tail (40 lines; use --tail <n>)
 dlg apply  <runId>                      # write the reviewed patch to your tree
 dlg undo   <runId>                      # reverse an applied run
 ```

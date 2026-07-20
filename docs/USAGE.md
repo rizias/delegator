@@ -39,16 +39,16 @@ Two levels of integration, both optional:
 
 So "I have 50 different agents" needs no 50 integrations: one `dlg skill install agent-skills` writes a host-neutral skill into `~/.agents/skills/` that every Agent Skills-compatible agent discovers, and the escape hatch `dlg skill show` covers every other format by copy-paste. The adapter is just text. The guarantee that delegator *works* comes from the CLI; the adapter only improves *when the brain reaches for it*.
 
-**Skills stay current on their own.** Each installed skill carries a version stamp (`metadata.delegator-skill-version`, a UTC timestamp). When you update the `dlg` binary, the next `dlg` command silently refreshes the installed global skill to the version this `dlg` ships — no command, no flag (so don't hand-edit the installed global copy; the next update overwrites it). To customize the skill for one project, drop your own `SKILL.md` into that project's skills folder: on Codex/Pi a project skill overrides the global one, but on Claude Code the global (personal) skill wins, so there it can't be overridden per-project.
+**Skills stay current on their own.** Each installed skill carries a version stamp (`metadata.delegator-skill-version`, a UTC timestamp). When you update the `dlg` binary, the next `dlg` command refreshes the installed global skill to the version this `dlg` ships and writes a stderr notice when it changes one — no command, no flag (so don't hand-edit the installed global copy; the next update overwrites it). To customize the skill for one project, drop your own `SKILL.md` into that project's skills folder: on Codex/Pi a project skill overrides the global one, but on Claude Code the global (personal) skill wins, so there it can't be overridden per-project.
 
 ## Several agents at once
 
 Open Claude Code, Codex, and OpenCode in the same repo simultaneously — all three can delegate, because:
 
 - They share `~/.delegator/` (providers, secrets, key pools) — one place to configure.
-- Runs are grouped per project and each run gets its own git worktree, so concurrent runs never collide in the filesystem.
+- Runs are grouped per project: spawned CLI runs in git projects get their own worktree, non-git CLI runs get a workspace copy, and direct-API runs have neither.
 - A *provider* runs **unbounded by default** — cap it with `maxConcurrent` (e.g. `maxConcurrent: 1` for one run at a time; a model can also cap itself with `limits.concurrent` — see [verification-model.md](verification-model.md) §1). Dispatches past a cap queue rather than overlap. Parallelism across *different* providers/hosts is always free.
-- A run id is global; `dlg status` from any host sees all runs for that project.
+- A run id is global; `dlg status` from any host sees all runs for that project. Listing reaps a run whose owner PID is dead into terminal `failed`; it does not kill a worker process that outlived its owner.
 
 So "I want each of them to use delegator" = install each host's adapter once (or just rely on the bare CLI). No per-host servers, no coordination.
 
@@ -88,28 +88,28 @@ Now `dlg providers` reports every other worker as `restricted`, and any attempt 
 
 | Exit code | Meaning |
 |---|---|
-| `0` | Run completed (and applied, under `auto` policy) |
+| `0` | Run completed; under `auto`, it is applied only when eligible |
 | `1` | Internal CLI error |
 | `2` | Usage / config error |
-| `3` | Run rejected before it started (no available worker, validation) |
+| `3` | Terminal `rejected` result before completion (for example, no available worker or validation) |
 | `4` | Run finished with a NON-success status — `partial`, `requires-review`, `failed`, or `killed-*` (the envelope is still valid) |
 
-**`requires-review` (exit 4):** the patch is kept but is **never auto-applied**. This happens when the worker edited a judge file — test sources, test config, CI workflows, snapshots, or fixtures — making the verification result untrustworthy (see the frozen-judge model in [verification-model.md](verification-model.md)). Under `policy: auto` the apply is refused. Inspect the kept worktree/patch, then `dlg apply <id>` to apply manually after review.
+**`requires-review` (exit 4):** the patch is kept but is **never auto-applied**. This happens when the worker edited a judge file — test sources, test config, CI workflows, snapshots, or fixtures — making the verification result untrustworthy (see judge-path detection in [verification-model.md](verification-model.md)). Under `policy: auto` the apply is refused. Inspect the kept worktree/patch, then `dlg apply <id>` to apply manually after review.
 
-**Patch-loss protection:** if patch extraction fails after the worker exits cleanly, the run is `failed` (not silently `completed` with an empty diff) and the worktree is preserved so the work is recoverable via `dlg apply <id>`.
+**Patch-loss protection:** if patch extraction fails after the worker exits cleanly, the run is `failed` (not silently `completed` with an empty diff) and the worktree is preserved for manual recovery; `dlg apply <id>` cannot apply a run with no saved patch.
 
 Whether the heavy git checkout survives is governed by `defaults.worktreeRetention`
-(default `keep-unfinished`); `patch.diff` is persisted either way, so `dlg apply <id>`
-works regardless.
+(default `keep-unfinished`); when extraction produces a non-empty patch, `patch.diff` is persisted
+either way, so `dlg apply <id>` can apply it regardless.
 
 | Status | What it means | Worktree kept? (default `keep-unfinished`) |
 |---|---|---|
-| `completed` | Verification green, diff within thresholds | No — checkout dropped, `patch.diff` kept. Set `worktreeRetention: keep` to retain |
-| `partial` | Worker exited but verification failed, or killed mid-run | Yes — kept for inspection/recovery |
+| `completed` | Worker finished; auto-apply needs a saved patch and eligibility | No — checkout dropped; a non-empty `patch.diff` is kept. Set `worktreeRetention: keep` to retain |
+| `partial` | Worker exited but verification failed | Yes — kept for inspection/recovery |
 | `requires-review` | Patch exists; verification not trustworthy (judge-tampered) | Yes |
 | `failed` | No usable patch, or a hard error | Yes |
 | `killed-timeout` / `killed-no-progress` | Killed by a control bound | Yes |
-| `rejected` | Never started (unavailable worker, quota, validation) | No |
+| `rejected` | Terminal result before completion | May be kept if work already started |
 
 ## Run statistics
 

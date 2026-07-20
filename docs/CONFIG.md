@@ -34,6 +34,13 @@ current `workers:`, `tiers:`, `trust`, `card`, or `autoApply` routing model. Leg
 `workers:`, and `tiers:` configs still load for back-compat, but they are not the documented shape
 for new config.
 
+| Field | Values | Meaning |
+|---|---|---|
+| `verify.build`, `verify.test`, `verify.lint` | command string or `{ command, win?, posix? }` | Verification commands. |
+| `verify.timeoutMs` | positive integer | Verification timeout in milliseconds. |
+| `verify.shell` | string | Shell used for verification commands. |
+| `restrict.workers`, `restrict.tiers` | string list | Project allow-lists for workers or legacy tiers. |
+
 Durations accept `500ms`, `90s`, `10m`, `2h`, or a plain millisecond number.
 
 ## Files
@@ -42,7 +49,7 @@ Durations accept `500ms`, `90s`, `10m`, `2h`, or a plain millisecond number.
 - `~/.delegator/runtimes.yaml` - optional runtime descriptor overrides/additions.
 - packaged `runtimes.default.yaml` - built-in descriptors loaded before user overrides.
 - `~/.delegator/secrets.yaml` - API keys only. Agents must never read it.
-- `<repo>/.delegator.yaml` - project overrides for defaults/privacy/verify/restrict; it cannot define providers.
+- `<repo>/.delegator.yaml` - project overrides for defaults/privacy/tiers/verify/restrict; it cannot define providers.
 
 ## Minimal viable config
 
@@ -364,7 +371,7 @@ Accepted compatibility/operations fields in the zod schema:
 |---|---|
 | `isolation` | Tolerated input field; current shipped isolation is worktree-based. |
 | `keepRuns` | How many finished-run receipts (envelope + `patch.diff` + logs — light, KB each) are kept per project; oldest pruned. |
-| `worktreeRetention` | Fate of a run's heavy git checkout (often 100s of MB); `patch.diff` is kept either way, so `dlg apply` always works. `keep-unfinished` (default): drop it for completed runs, keep it for killed/failed/partial so their work stays recoverable. `on-finish`: always drop when the run ends. `keep`: never auto-drop (only `keepRuns` prunes it). Reclaim existing piles with `dlg clean --worktrees`. |
+| `worktreeRetention` | Fate of a run's heavy git checkout (often 100s of MB). A non-empty extracted patch is kept as `patch.diff`, so `dlg apply` works when that file exists. `keep-unfinished` (default): drop it for completed runs, keep it for killed/failed/partial so their work stays recoverable. `on-finish`: always drop when the run ends. `keep`: never auto-drop (only `keepRuns` prunes it). Reclaim existing piles with `dlg clean --worktrees`. |
 | `queueTimeoutSeconds` | Queue wait timeout. |
 | `queuePollSeconds` | Queue poll interval. |
 | `keyCooldown` | Duration a failed key is parked after key-specific failures. |

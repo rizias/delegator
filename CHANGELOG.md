@@ -25,6 +25,7 @@ All notable changes to Delegator are documented here. This project adheres to
 
 ### Documentation
 - Host skills now advise running self-review fan-outs through separate-pool workers when practical.
+- Architecture doc, public docs and host skills corrected to match the shipped implementation.
 
 ## [0.4.1] — 2026-07-03
 
