@@ -6,6 +6,8 @@ All notable changes to Delegator are documented here. This project adheres to
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-07-21
+
 ### Added
 - Providers and individual models can now be parked and later revived without deleting their configuration or comments.
 
